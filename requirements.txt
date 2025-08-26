@@ -1,0 +1,5 @@
+botbuilder-core
+pandas
+snowflake-connector-python
+openai
+requests
