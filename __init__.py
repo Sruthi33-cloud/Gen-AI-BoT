@@ -209,8 +209,6 @@ async def message_handler(turn_context: TurnContext):
         
         # --- DYNAMIC USER MAPPING ---
         # Look up the Snowflake username from the Teams user ID
-        # You must implement this logic, as it's specific to your organization
-        # For a production app, this should query a mapping table in your database
         # For a simple demo, you can use a hardcoded map
         user_id_mapping = {
             "29:1f77d853-90d5-4554-b5b5-f55e5898d9c5": "saisri", # Example Teams ID for user 'saisri'
@@ -251,11 +249,15 @@ async def message_handler(turn_context: TurnContext):
 
     await turn_context.send_activity(Activity(text=final_answer, type=ActivityTypes.message))
 
-# --- The Main Azure Functions Entry Point ---
-# This function is triggered by an HTTP request
-async def main(req: func.HttpRequest) -> func.HttpResponse:
-    logging.info('Python HTTP trigger function received a request.')
 
+# --- The Main Azure Functions Entry Point ---
+# The new recommended Azure Functions for Python V2 approach
+app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
+
+@app.route(route="Data", methods=["POST"])
+async def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info('Python HTTP trigger function received a request.')
+    
     try:
         response = await ADAPTER.process_activity(
             req.get_json(),
