@@ -3,3 +3,5 @@ pandas
 snowflake-connector-python
 openai
 requests
+aiohttp
+azure-functions
