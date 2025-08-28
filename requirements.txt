@@ -1,11 +1,13 @@
 azure-functions==1.13.2
 botbuilder-core==4.14.4
 botbuilder-schema==4.14.4
-aiohttp==3.9.0
+botbuilder-integrations-aiohttp==4.14.4
+aiohttp==3.8.1
 requests==2.31.0
 pandas
 openai
 snowflake-connector-python
+
 
 
 
