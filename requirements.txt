@@ -8,3 +8,5 @@ requests==2.31.0
 pandas
 openai
 snowflake-connector-python
+PyJWT==2.9.0
+
