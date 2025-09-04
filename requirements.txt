@@ -2,10 +2,11 @@ azure-functions==1.13.2
 botbuilder-core==4.17.0
 botbuilder-schema==4.17.0
 botbuilder-integration-aiohttp==4.17.0
-aiohttp==3.8.4
+aiohttp==3.10.5
 async_timeout==4.0.2
 requests==2.31.0
-pandas
-openai
-snowflake-connector-python
+pandas==1.5.3
+openai==0.28.0
+snowflake-connector-python==2.9.2
 PyJWT==2.9.0
+
