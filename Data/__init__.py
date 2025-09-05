@@ -141,8 +141,7 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
         # Create settings and adapter per request
         settings = BotFrameworkAdapterSettings(
             app_id=APP_ID,
-            app_password=APP_PASSWORD,
-            tenant_id=APP_TENANT_ID if APP_TYPE == "SingleTenant" else None
+            app_password=APP_PASSWORD
         )
         
         adapter = BotFrameworkAdapter(settings)
