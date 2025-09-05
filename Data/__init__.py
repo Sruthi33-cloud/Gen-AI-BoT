@@ -144,15 +144,11 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
             app_password=APP_PASSWORD
         )
 
-        # Explicitly configure authentication for a single-tenant bot
-        authentication_configuration = AuthenticationConfiguration(
-            claims_validator=JwtTokenValidation.validate_claims
-        )
-        
-        credentials = MicrosoftAppCredentials(APP_ID, APP_PASSWORD)
-
-        # Instantiate the adapter with the explicit authentication configuration
-        adapter = BotFrameworkAdapter(credentials, authentication_configuration, settings)
+        # NOTE: This is the crucial fix for your specific SDK version
+        # It instantiates the adapter with settings, then manually sets the credentials.
+        adapter = BotFrameworkAdapter(settings)
+        if APP_TYPE == "SingleTenant":
+            adapter.credentials = MicrosoftAppCredentials(APP_ID, APP_PASSWORD, is_single_tenant=True)
 
         logger.info(f"Activity type: {activity.type}, Channel: {activity.channel_id}")
         logger.info(f"Service URL: {activity.service_url}")
