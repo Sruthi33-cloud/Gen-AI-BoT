@@ -144,11 +144,19 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
             app_password=APP_PASSWORD
         )
 
-        # Instantiate the adapter. This works for your SDK version.
-        adapter = BotFrameworkAdapter(settings)
-        
-        # Explicitly configure the adapter's authentication for a single-tenant bot.
-        # This is the line where the 'is_single_tenant' argument was removed.
+        # 1. Create a custom AuthenticationConfiguration
+        # This explicitly tells the adapter to trust tokens from the public Bot Framework issuer.
+        # This is the key fix for the "unauthorized" error.
+        auth_config = AuthenticationConfiguration(
+            allowed_audiences=[APP_ID, "https://api.botframework.com"],
+            claims_validator=SkillValidation.is_v4_skill_claim
+        )
+
+        # 2. Instantiate the adapter with the custom configuration
+        # This is where we ensure the adapter knows to accept the multi-tenant tokens.
+        adapter = BotFrameworkAdapter(settings, authentication_configuration=auth_config)
+
+        # 3. Explicitly set single-tenant credentials if applicable
         if APP_TYPE == "SingleTenant":
             adapter.credentials = MicrosoftAppCredentials(APP_ID, APP_PASSWORD)
 
