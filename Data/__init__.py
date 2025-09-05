@@ -144,11 +144,13 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
             app_password=APP_PASSWORD
         )
 
-        # NOTE: This is the crucial fix for your specific SDK version
-        # It instantiates the adapter with settings, then manually sets the credentials.
+        # Instantiate the adapter. This works for your SDK version.
         adapter = BotFrameworkAdapter(settings)
+        
+        # Explicitly configure the adapter's authentication for a single-tenant bot.
+        # This is the line where the 'is_single_tenant' argument was removed.
         if APP_TYPE == "SingleTenant":
-            adapter.credentials = MicrosoftAppCredentials(APP_ID, APP_PASSWORD, is_single_tenant=True)
+            adapter.credentials = MicrosoftAppCredentials(APP_ID, APP_PASSWORD)
 
         logger.info(f"Activity type: {activity.type}, Channel: {activity.channel_id}")
         logger.info(f"Service URL: {activity.service_url}")
