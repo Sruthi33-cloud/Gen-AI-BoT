@@ -138,26 +138,17 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
         activity = Activity.deserialize(body)
         auth_header = req.headers.get('Authorization') or req.headers.get('authorization') or ''
 
-        # Create settings and adapter per request
+        # Create settings for the adapter
         settings = BotFrameworkAdapterSettings(
             app_id=APP_ID,
             app_password=APP_PASSWORD
         )
 
-        # 1. Create a custom AuthenticationConfiguration
-        # The claims_validator argument has been removed, as it's not supported in your SDK version
-        # This is the key fix for the "unauthorized" error.
-        auth_config = AuthenticationConfiguration(
-            allowed_audiences=[APP_ID, "https://api.botframework.com"]
-        )
+        # Explicitly create credentials for single-tenant authentication
+        credentials = MicrosoftAppCredentials(APP_ID, APP_PASSWORD)
 
-        # 2. Instantiate the adapter with the custom configuration
-        # This is where we ensure the adapter knows to accept the multi-tenant tokens.
-        adapter = BotFrameworkAdapter(settings, authentication_configuration=auth_config)
-
-        # 3. Explicitly set single-tenant credentials if applicable
-        if APP_TYPE == "SingleTenant":
-            adapter.credentials = MicrosoftAppCredentials(APP_ID, APP_PASSWORD)
+        # The adapter is now initialized directly with the settings and credentials
+        adapter = BotFrameworkAdapter(settings, credentials=credentials)
 
         logger.info(f"Activity type: {activity.type}, Channel: {activity.channel_id}")
         logger.info(f"Service URL: {activity.service_url}")
