@@ -148,8 +148,7 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
         # This explicitly tells the adapter to trust tokens from the public Bot Framework issuer.
         # This is the key fix for the "unauthorized" error.
         auth_config = AuthenticationConfiguration(
-            allowed_audiences=[APP_ID, "https://api.botframework.com"],
-            claims_validator=SkillValidation.is_v4_skill_claim
+            allowed_audiences=[APP_ID, "https://api.botframework.com"]
         )
 
         # 2. Instantiate the adapter with the custom configuration
