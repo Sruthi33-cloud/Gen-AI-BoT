@@ -6,7 +6,7 @@ import json
 import jwt
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
 from botbuilder.schema import Activity, ActivityTypes
-from botframework.connector.auth import JwtTokenValidation, SkillValidation
+from botframework.connector.auth import JwtTokenValidation, SkillValidation, AuthenticationConfiguration, MicrosoftAppCredentials
 import logging
 import sys
 import aiohttp
@@ -35,11 +35,11 @@ def decode_jwt_payload(token):
             return None
             
         jwt_token = token.replace('Bearer ', '')
-        
+            
         # Decode header and payload (without verification)
         header = jwt.get_unverified_header(jwt_token)
         payload = jwt.decode(jwt_token, options={"verify_signature": False})
-        
+            
         return {
             "header": header,
             "payload": payload
@@ -63,7 +63,7 @@ async def diagnose_token_issue(activity, auth_header):
             logger.info(f"Incoming token service url: {decoded['payload'].get('serviceurl')}")
     else:
         logger.info("Auth header present: False")
-    
+        
     # 2. Check service URL
     logger.info(f"Activity service URL: {activity.service_url}")
     
@@ -80,7 +80,7 @@ async def diagnose_token_issue(activity, auth_header):
             'client_secret': APP_PASSWORD,
             'scope': 'https://api.botframework.com/.default'
         }
-        
+            
         async with aiohttp.ClientSession() as session:
             async with session.post(token_url, data=data) as response:
                 if response.status == 200:
@@ -97,7 +97,7 @@ async def diagnose_token_issue(activity, auth_header):
                     
     except Exception as e:
         logger.error(f"Exception getting our token: {e}")
-    
+            
     logger.info("=== END DIAGNOSTIC ===")
 
 async def bot_logic(turn_context: TurnContext):
@@ -143,16 +143,22 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
             app_id=APP_ID,
             app_password=APP_PASSWORD
         )
+
+        # Explicitly configure authentication for a single-tenant bot
+        authentication_configuration = AuthenticationConfiguration(
+            claims_validator=JwtTokenValidation.validate_claims
+        )
         
-        adapter = BotFrameworkAdapter(settings)
-        
+        credentials = MicrosoftAppCredentials(APP_ID, APP_PASSWORD)
+
+        # Instantiate the adapter with the explicit authentication configuration
+        adapter = BotFrameworkAdapter(credentials, authentication_configuration, settings)
+
         logger.info(f"Activity type: {activity.type}, Channel: {activity.channel_id}")
         logger.info(f"Service URL: {activity.service_url}")
         
         # Diagnostic
         await diagnose_token_issue(activity, auth_header)
-        
-        # Remove this line: `await adapter.trust_service_url(activity.service_url)`
         
         # Process the activity
         invoke_response = await adapter.process_activity(activity, auth_header, bot_logic)
