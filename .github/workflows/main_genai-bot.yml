@@ -1,7 +1,4 @@
-# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/appservice-actions/tree/master/builddeploy
-# More info on Python, GitHub Actions, and Azure Functions: https://aka.ms/python-webapps-actions
-
-name: Deploy Python project to Azure Function App - Oryx Build
+name: Deploy Python project to Azure Function App - Direct Deployment
 
 on:
   push:
@@ -13,32 +10,35 @@ env:
   PYTHON_VERSION: '3.9'
 
 jobs:
-  deploy:
+  build_and_deploy:
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
-      contents: read
+      id-token: write # This is required for requesting the JWT
+      contents: read # This is required for actions/checkout
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      
+
       - name: Setup Python version
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          
+
+      - name: Install dependencies
+        run: |
+          pip install --target=".python_packages/lib/site-packages" -r ./requirements.txt
+
       - name: Login to Azure
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_465775D76CA5448BB6432ED8A34E4FF2 }}
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_08CFD732EBCA4ADA8778CD85AA2BC2ED }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7F34C990DA54DA48DE2E38DB358BA8A }}
-          
-      - name: 'Build and Deploy Function App'
-        uses: azure/appservice-actions/builddeploy@v2
+      
+      - name: 'Deploy to Azure Function App'
+        uses: Azure/functions-action@v1
         with:
           app-name: 'GenAI-BoT'
-          package: '.'
-          scm-do-build-during-deployment: true
-          enable-oryx-build: true
+          package: '.' # This will deploy the entire folder, including .python_packages
+          scm-do-build-during-deployment: false # Crucial change
