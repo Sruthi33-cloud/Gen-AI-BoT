@@ -2,7 +2,7 @@
 # More GitHub Actions for Azure: https://github.com/Azure/actions
 # More info on Python, GitHub Actions, and Azure Functions: https://aka.ms/python-webapps-actions
 
-name: Deploy Python project to Azure Function App - GenAI-BoT
+name: Deploy to Azure Function App - Oryx Build
 
 on:
   push:
@@ -11,7 +11,6 @@ on:
   workflow_dispatch:
 
 env:
-  AZURE_FUNCTIONAPP_PACKAGE_PATH: '.' 
   PYTHON_VERSION: '3.9'
 
 jobs:
@@ -20,7 +19,7 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -37,11 +36,11 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_08CFD732EBCA4ADA8778CD85AA2BC2ED }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7F34C990DA54DA48DE2E38DB358BA8A }}
           
-      - name: 'Deploy to Azure Functions'
-        uses: Azure/functions-action@v1
-        id: deploy-to-function
+      - name: 'Build and deploy Python project'
+        uses: azure/appservice-build-action@v3
         with:
           app-name: 'GenAI-BoT'
-          slot-name: 'Production'
-          package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
+          package: .
+          startup-command: 'python -m Functions.__init__'
+          build-command: 'pip install -r requirements.txt'
           scm-do-build-during-deployment: true
