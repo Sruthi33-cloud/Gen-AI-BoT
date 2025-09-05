@@ -1,8 +1,7 @@
-# Docs for the Azure Web Apps Deploy action: https://github.com/azure/functions-action
-# More GitHub Actions for Azure: https://github.com/Azure/actions
+# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/appservice-actions/tree/master/builddeploy
 # More info on Python, GitHub Actions, and Azure Functions: https://aka.ms/python-webapps-actions
 
-name: Deploy to Azure Function App - Oryx Build
+name: Deploy Python project to Azure Function App - Oryx Build
 
 on:
   push:
@@ -36,11 +35,10 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_08CFD732EBCA4ADA8778CD85AA2BC2ED }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7F34C990DA54DA48DE2E38DB358BA8A }}
           
-      - name: 'Build and deploy Python project'
-        uses: azure/appservice-build-action@v3
+      - name: 'Build and Deploy Function App'
+        uses: azure/appservice-actions/builddeploy@v2
         with:
           app-name: 'GenAI-BoT'
-          package: .
-          startup-command: 'python -m Functions.__init__'
-          build-command: 'pip install -r requirements.txt'
+          package: '.'
           scm-do-build-during-deployment: true
+          enable-oryx-build: true
