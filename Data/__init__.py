@@ -152,8 +152,7 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
         # Diagnostic
         await diagnose_token_issue(activity, auth_header)
         
-        # Trust the service URL
-        await adapter.trust_service_url(activity.service_url)
+        # Remove this line: `await adapter.trust_service_url(activity.service_url)`
         
         # Process the activity
         invoke_response = await adapter.process_activity(activity, auth_header, bot_logic)
