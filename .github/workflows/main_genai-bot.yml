@@ -23,15 +23,18 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
+      
       - name: Setup Python version
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install dependencies
+      - name: 'Build and package'
         run: |
-          pip install --target=".python_packages/lib/site-packages" -r ./requirements.txt
+          # This step is empty because Oryx will handle the build on the Azure side.
+          # We just need to ensure the project files are ready for deployment.
+          # You can add tests or linting here if needed.
+          echo "Preparing package for deployment..."
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
@@ -53,12 +56,14 @@ jobs:
         with:
           name: python-app
           path: .
+          
       - name: Login to Azure
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_465775D76CA5448BB6432ED8A34E4FF2 }}
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_08CFD732EBCA4ADA8778CD85AA2BC2ED }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7F34C990DA54DA48DE2E38DB358BA8A }}
+          
       - name: 'Deploy to Azure Functions'
         uses: Azure/functions-action@v1
         id: deploy-to-function
