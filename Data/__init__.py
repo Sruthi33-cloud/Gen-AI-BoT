@@ -108,6 +108,9 @@ async def bot_logic(turn_context: TurnContext):
             
             response_text = f"Echo: {user_message}"
             
+            # This is the new log message to help pinpoint the issue
+            logger.info(f"Preparing to send response: {response_text}")
+            
             await turn_context.send_activity(response_text)
             logger.info(f"Sent response: {response_text}")
         elif turn_context.activity.type == "membersAdded":
@@ -119,6 +122,7 @@ async def bot_logic(turn_context: TurnContext):
                         logger.info("Sent welcome message to new member")
     except Exception as e:
         logger.error(f"Error in bot_logic: {str(e)}", exc_info=True)
+        # Re-raise the exception so it's logged by the main function's error handler
         raise
 
 async def main(req: func.HttpRequest) -> func.HttpResponse:
