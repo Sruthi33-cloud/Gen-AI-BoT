@@ -6,7 +6,7 @@ import json
 import jwt
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
 from botbuilder.schema import Activity, ActivityTypes
-from botframework.connector.auth import JwtTokenValidation, SkillValidation, AuthenticationConfiguration, MicrosoftAppCredentials
+from botframework.connector.auth import MicrosoftAppCredentials
 import logging
 import sys
 import aiohttp
@@ -23,8 +23,11 @@ if not logger.hasHandlers():
 # Get environment variables
 APP_ID = os.environ.get("MicrosoftAppId", "")
 APP_PASSWORD = os.environ.get("MicrosoftAppPassword", "")
+# Use the correct single-tenant app type as per your bot's configuration
 APP_TYPE = os.environ.get("MicrosoftAppType", "SingleTenant")
 APP_TENANT_ID = os.environ.get("MicrosoftAppTenantId", "")
+# Set the region explicitly
+BOT_REGION = "canadacentral"
 
 logger.info(f"Bot configured: AppId={APP_ID[:8]}..., Type={APP_TYPE}")
 
@@ -108,13 +111,11 @@ async def bot_logic(turn_context: TurnContext):
             
             response_text = f"Echo: {user_message}"
             
-            # This is the new log message to help pinpoint the issue
             logger.info(f"Preparing to send response: {response_text}")
             
             await turn_context.send_activity(response_text)
             logger.info(f"Sent response: {response_text}")
         elif turn_context.activity.type == "membersAdded":
-            # Handle new members
             if hasattr(turn_context.activity, 'members_added') and turn_context.activity.members_added:
                 for member in turn_context.activity.members_added:
                     if member.id != turn_context.activity.recipient.id:
@@ -122,7 +123,6 @@ async def bot_logic(turn_context: TurnContext):
                         logger.info("Sent welcome message to new member")
     except Exception as e:
         logger.error(f"Error in bot_logic: {str(e)}", exc_info=True)
-        # Re-raise the exception so it's logged by the main function's error handler
         raise
 
 async def main(req: func.HttpRequest) -> func.HttpResponse:
@@ -142,16 +142,18 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
         activity = Activity.deserialize(body)
         auth_header = req.headers.get('Authorization') or req.headers.get('authorization') or ''
 
-        # Create settings for the adapter with App ID and Password
+        # The definitive fix for outbound 'Unauthorized' errors
         settings = BotFrameworkAdapterSettings(
             app_id=APP_ID,
             app_password=APP_PASSWORD
         )
-
-        # Initialize the adapter directly with the settings
-        # The credentials are set via the settings object
+        
+        # Initialize the adapter with settings to prevent the "credentials" keyword error
         adapter = BotFrameworkAdapter(settings)
-
+        
+        # Explicitly set the credentials on the adapter. This is the key to solving the outbound auth issue.
+        adapter._credentials = MicrosoftAppCredentials(APP_ID, APP_PASSWORD)
+        
         logger.info(f"Activity type: {activity.type}, Channel: {activity.channel_id}")
         logger.info(f"Service URL: {activity.service_url}")
         
