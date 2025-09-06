@@ -138,17 +138,15 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
         activity = Activity.deserialize(body)
         auth_header = req.headers.get('Authorization') or req.headers.get('authorization') or ''
 
-        # Create settings for the adapter
+        # Create settings for the adapter with App ID and Password
         settings = BotFrameworkAdapterSettings(
             app_id=APP_ID,
             app_password=APP_PASSWORD
         )
 
-        # Explicitly create credentials for single-tenant authentication
-        credentials = MicrosoftAppCredentials(APP_ID, APP_PASSWORD)
-
-        # The adapter is now initialized directly with the settings and credentials
-        adapter = BotFrameworkAdapter(settings, credentials=credentials)
+        # Initialize the adapter directly with the settings
+        # The credentials are set via the settings object
+        adapter = BotFrameworkAdapter(settings)
 
         logger.info(f"Activity type: {activity.type}, Channel: {activity.channel_id}")
         logger.info(f"Service URL: {activity.service_url}")
