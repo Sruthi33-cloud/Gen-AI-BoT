@@ -204,8 +204,9 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
             
             # Force token refresh to validate credentials
             try:
-                token = await credentials.get_access_token()
+                token = credentials.get_access_token()
                 logger.info("Successfully validated credentials with token refresh")
+                logger.info(f"Token acquired: {token[:20]}..." if token else "No token received")
             except Exception as token_error:
                 logger.error(f"Failed to get access token: {str(token_error)}")
                 raise token_error
