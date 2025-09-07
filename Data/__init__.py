@@ -223,7 +223,7 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
             # CRITICAL: Override the connector client creation to use our validated credentials
             original_create_connector_client = adapter.create_connector_client
             
-            def create_connector_client_override(service_url: str):
+            def create_connector_client_override(service_url: str, *args, **kwargs):
                 logger.info(f"Creating connector client for service URL: {service_url}")
                 return ConnectorClient(credentials, base_url=service_url)
             
