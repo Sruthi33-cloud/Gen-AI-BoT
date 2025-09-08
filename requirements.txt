@@ -1,7 +1,6 @@
 azure-functions==1.13.2
-botbuilder-core==4.14.4
-botbuilder-schema==4.14.4
-botbuilder-integration-aiohttp==4.14.4
+botbuilder-core==4.19.1
+botbuilder-schema==4.19.1
 aiohttp==3.8.4
 async_timeout==4.0.2
 requests==2.31.0
@@ -10,8 +9,3 @@ openai
 snowflake-connector-python
 PyJWT==2.9.0
 cryptography==43.0.3
-
-
-
-
-
