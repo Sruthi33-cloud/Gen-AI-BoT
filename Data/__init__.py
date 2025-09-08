@@ -25,9 +25,9 @@ APP_ID = os.environ.get("MicrosoftAppId", "")
 APP_PASSWORD = os.environ.get("MicrosoftAppPassword", "")
 APP_TYPE = os.environ.get("MicrosoftAppType", "SingleTenant")
 APP_TENANT_ID = os.environ.get("MicrosoftAppTenantId", "")
-BOT_REGION = "canadacentral"
+BOT_REGION = os.environ.get("MicrosoftAppRegion", "canadacentral")  # <--- HIGHLIGHT: Now configurable
 
-logger.info(f"Bot configured: AppId={APP_ID[:8]}..., Type={APP_TYPE}, Tenant={APP_TENANT_ID}")
+logger.info(f"Bot configured: AppId={APP_ID[:8]}..., Type={APP_TYPE}, Tenant={APP_TENANT_ID}, Region={BOT_REGION}")
 
 def decode_jwt_payload(token, label=""):
     """Decode JWT payload without verification for debugging"""
@@ -67,6 +67,7 @@ async def diagnose_token_issue(activity, auth_header):
     logger.info(f"Our App ID: {APP_ID}")
     logger.info(f"Our App Type: {APP_TYPE}")
     logger.info(f"Our Tenant ID: {APP_TENANT_ID}")
+    logger.info(f"Our Region: {BOT_REGION}")
 
     # 4. Get outgoing token for comparison
     try:
@@ -80,16 +81,17 @@ async def diagnose_token_issue(activity, auth_header):
 
         async with aiohttp.ClientSession() as session:
             async with session.post(token_url, data=data) as response:
-                if response.status == 200:
-                    token_response = await response.json()
+                token_response = await response.json()
+                # HIGHLIGHT: Always log raw response for troubleshooting
+                logger.info(f"Raw outgoing token response: {json.dumps(token_response)}")
+                if response.status == 200 and "access_token" in token_response:
                     token = token_response.get('access_token')
                     logger.info("Successfully got outgoing access token from Azure AD.")
                     decode_jwt_payload(f"Bearer {token}", label="OUTGOING")
                 else:
-                    error_text = await response.text()
-                    logger.error(f"Failed to get outgoing token: {response.status} - {error_text}")
+                    logger.error(f"Token response missing 'access_token' or error. Status: {response.status}, Full response: {json.dumps(token_response)}")
     except Exception as e:
-        logger.error(f"Exception getting outgoing token: {e}")
+        logger.error(f"Exception getting outgoing token: {e}", exc_info=True)
 
     logger.info("==== END TOKEN DIAGNOSTICS ====")
 
@@ -136,6 +138,8 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
         )
         adapter = BotFrameworkAdapter(settings)
         adapter._credentials = MicrosoftAppCredentials(APP_ID, APP_PASSWORD)
+        # HIGHLIGHT: If your SDK/version supports region, set it here
+        # Example: adapter.region = BOT_REGION
 
         logger.info(f"Activity type: {activity.type}, Channel: {activity.channel_id}")
         logger.info(f"Service URL: {activity.service_url}")
