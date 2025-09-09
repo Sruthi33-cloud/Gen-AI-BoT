@@ -35,9 +35,9 @@ class SingleTenantAppCredentials(MicrosoftAppCredentials):
     def __init__(self, app_id: str, password: str, tenant_id: str):
         super().__init__(app_id, password)
         self.tenant_id = tenant_id
-        # Override the OAuth endpoint for single-tenant
-        self.oauth_endpoint = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
-        logger.info(f"SingleTenantAppCredentials initialized with endpoint: {self.oauth_endpoint}")
+        # FIXED: Use authority format, not full token endpoint
+        self.oauth_endpoint = f"https://login.microsoftonline.com/{tenant_id}"
+        logger.info(f"SingleTenantAppCredentials initialized with authority: {self.oauth_endpoint}")
 
 def decode_jwt_payload(token, label=""):
     """Decode JWT payload without verification for debugging"""
@@ -113,7 +113,7 @@ async def bot_logic(turn_context: TurnContext):
             logger.info(f"Preparing to send response: {response_text}")
             await turn_context.send_activity(response_text)
             logger.info(f"Successfully sent response: {response_text}")
-        elif turn_context.activity.type == ActivityTypes.members_added:
+        elif turn_context.activity.type == "membersAdded":
             if hasattr(turn_context.activity, 'members_added') and turn_context.activity.members_added:
                 for member in turn_context.activity.members_added:
                     if member.id != turn_context.activity.recipient.id:
@@ -161,8 +161,8 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
             
             # Override OAuth endpoint for single-tenant
             if APP_TYPE == "SingleTenant" and APP_TENANT_ID:
-                settings.oauth_endpoint = f"https://login.microsoftonline.com/{APP_TENANT_ID}/oauth2/v2.0/token"
-                logger.info(f"Set OAuth endpoint to: {settings.oauth_endpoint}")
+                settings.oauth_endpoint = f"https://login.microsoftonline.com/{APP_TENANT_ID}"
+                logger.info(f"Set OAuth authority to: {settings.oauth_endpoint}")
 
             adapter = BotFrameworkAdapter(settings)
             
