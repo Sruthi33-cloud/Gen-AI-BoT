@@ -25,9 +25,19 @@ APP_ID = os.environ.get("MicrosoftAppId", "")
 APP_PASSWORD = os.environ.get("MicrosoftAppPassword", "")
 APP_TYPE = os.environ.get("MicrosoftAppType", "SingleTenant")
 APP_TENANT_ID = os.environ.get("MicrosoftAppTenantId", "")
-BOT_REGION = os.environ.get("MicrosoftAppRegion", "canadacentral")  # <--- HIGHLIGHT: Now configurable
+BOT_REGION = os.environ.get("MicrosoftAppRegion", "canadacentral")
 
 logger.info(f"Bot configured: AppId={APP_ID[:8]}..., Type={APP_TYPE}, Tenant={APP_TENANT_ID}, Region={BOT_REGION}")
+
+class SingleTenantAppCredentials(MicrosoftAppCredentials):
+    """Custom credentials class that forces single-tenant OAuth endpoint"""
+    
+    def __init__(self, app_id: str, password: str, tenant_id: str):
+        super().__init__(app_id, password)
+        self.tenant_id = tenant_id
+        # Override the OAuth endpoint for single-tenant
+        self.oauth_endpoint = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+        logger.info(f"SingleTenantAppCredentials initialized with endpoint: {self.oauth_endpoint}")
 
 def decode_jwt_payload(token, label=""):
     """Decode JWT payload without verification for debugging"""
@@ -82,7 +92,6 @@ async def diagnose_token_issue(activity, auth_header):
         async with aiohttp.ClientSession() as session:
             async with session.post(token_url, data=data) as response:
                 token_response = await response.json()
-                # HIGHLIGHT: Always log raw response for troubleshooting
                 logger.info(f"Raw outgoing token response: {json.dumps(token_response)}")
                 if response.status == 200 and "access_token" in token_response:
                     token = token_response.get('access_token')
@@ -103,13 +112,15 @@ async def bot_logic(turn_context: TurnContext):
             response_text = f"Echo: {user_message}"
             logger.info(f"Preparing to send response: {response_text}")
             await turn_context.send_activity(response_text)
-            logger.info(f"Sent response: {response_text}")
-        elif turn_context.activity.type == "membersAdded":
+            logger.info(f"Successfully sent response: {response_text}")
+        elif turn_context.activity.type == ActivityTypes.members_added:
             if hasattr(turn_context.activity, 'members_added') and turn_context.activity.members_added:
                 for member in turn_context.activity.members_added:
                     if member.id != turn_context.activity.recipient.id:
                         await turn_context.send_activity("Hello! I'm an echo bot. Send me a message!")
                         logger.info("Sent welcome message to new member")
+        else:
+            logger.info(f"Received activity type: {turn_context.activity.type} - no action taken")
     except Exception as e:
         logger.error(f"Error in bot_logic: {str(e)}", exc_info=True)
         raise
@@ -131,15 +142,38 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
         activity = Activity.deserialize(body)
         auth_header = req.headers.get('Authorization') or req.headers.get('authorization') or ''
 
-        # Adapter settings
-        settings = BotFrameworkAdapterSettings(
-            app_id=APP_ID,
-            app_password=APP_PASSWORD
-        )
-        adapter = BotFrameworkAdapter(settings)
-        adapter._credentials = MicrosoftAppCredentials(APP_ID, APP_PASSWORD)
-        # HIGHLIGHT: If your SDK/version supports region, set it here
-        # Example: adapter.region = BOT_REGION
+        # CRITICAL FIX: Use custom credentials class for single-tenant
+        try:
+            if APP_TYPE == "SingleTenant" and APP_TENANT_ID:
+                # Use our custom single-tenant credentials
+                credentials = SingleTenantAppCredentials(APP_ID, APP_PASSWORD, APP_TENANT_ID)
+                logger.info("Using SingleTenantAppCredentials")
+            else:
+                # Use default multi-tenant credentials
+                credentials = MicrosoftAppCredentials(APP_ID, APP_PASSWORD)
+                logger.info("Using standard MicrosoftAppCredentials")
+
+            # Create adapter settings with tenant-specific OAuth endpoint
+            settings = BotFrameworkAdapterSettings(
+                app_id=APP_ID,
+                app_password=APP_PASSWORD
+            )
+            
+            # Override OAuth endpoint for single-tenant
+            if APP_TYPE == "SingleTenant" and APP_TENANT_ID:
+                settings.oauth_endpoint = f"https://login.microsoftonline.com/{APP_TENANT_ID}/oauth2/v2.0/token"
+                logger.info(f"Set OAuth endpoint to: {settings.oauth_endpoint}")
+
+            adapter = BotFrameworkAdapter(settings)
+            
+            # Force use our custom credentials
+            adapter._credentials = credentials
+            
+            logger.info("Adapter created with single-tenant credentials")
+
+        except Exception as adapter_error:
+            logger.error(f"Failed to create adapter: {str(adapter_error)}", exc_info=True)
+            return func.HttpResponse(f"Adapter creation failed: {str(adapter_error)}", status_code=500)
 
         logger.info(f"Activity type: {activity.type}, Channel: {activity.channel_id}")
         logger.info(f"Service URL: {activity.service_url}")
@@ -148,16 +182,23 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
         await diagnose_token_issue(activity, auth_header)
 
         # Process the activity
-        invoke_response = await adapter.process_activity(activity, auth_header, bot_logic)
+        try:
+            invoke_response = await adapter.process_activity(activity, auth_header, bot_logic)
 
-        if invoke_response:
-            return func.HttpResponse(
-                body=invoke_response.body,
-                status_code=invoke_response.status,
-                headers={"Content-Type": "application/json"}
-            )
-        else:
-            return func.HttpResponse(status_code=202)
+            if invoke_response:
+                logger.info("Bot processing completed with response")
+                return func.HttpResponse(
+                    body=invoke_response.body,
+                    status_code=invoke_response.status,
+                    headers={"Content-Type": "application/json"}
+                )
+            else:
+                logger.info("Bot processing completed successfully (no response)")
+                return func.HttpResponse(status_code=202)
+                
+        except Exception as process_error:
+            logger.error(f"Error processing activity: {str(process_error)}", exc_info=True)
+            return func.HttpResponse(f"Processing error: {str(process_error)}", status_code=500)
 
     except Exception as error:
         logger.error(f"Unhandled error in main: {str(error)}", exc_info=True)
