@@ -126,34 +126,53 @@ def get_user_data(user_id: str, conn) -> Optional[Dict[str, Any]]:
         "store_id": user_row.iloc[0]['store_id']
     }
 
-# STRATEGY 3: Ultra-efficient intent recognition
+# STRATEGY 3: Ultra-efficient intent recognition - FIXED
 def identify_metric_intent(user_query: str) -> Optional[str]:
     """Hybrid approach: Keyword matching first (0 tokens), minimal LLM fallback"""
     
     query_lower = user_query.lower()
+    logger.info(f"Intent recognition for query: '{user_query}'")
     
     # Phase 1: Direct keyword matching (NO TOKENS)
+    # Check for traffic/conversion keywords FIRST
+    traffic_keywords = ["traffic", "conversion", "convert", "visits"]
+    for keyword in traffic_keywords:
+        if keyword in query_lower:
+            logger.info(f"Traffic keyword match found: {keyword}")
+            return "traffic_conversion"
+    
+    # Check for sales keywords
+    sales_keywords = ["sales", "revenue", "amount", "money", "dollar"]
+    for keyword in sales_keywords:
+        if keyword in query_lower:
+            logger.info(f"Sales keyword match found: {keyword}")
+            return "sales_amount"
+    
+    # Check aliases from knowledge base
     for alias, tool_name in ALIAS_TO_TOOL_NAME.items():
         if alias in query_lower:
-            logger.info(f"Keyword match found: {alias} -> {tool_name}")
+            logger.info(f"Alias match found: {alias} -> {tool_name}")
             return tool_name
     
     # Phase 2: Minimal LLM only if keyword matching fails
     if not AZURE_OPENAI_CLIENT:
-        return "sales_amount" # Safe default
+        logger.info("No OpenAI client, defaulting to sales_amount")
+        return "sales_amount"
         
     # ULTRA-MINIMAL prompt (only ~15 tokens)
-    prompt = f"'{user_query}' -> sales_amount OR traffic_conversion"
+    prompt = f"Query: '{user_query}'\nIs this about traffic/conversion or sales/revenue?\nAnswer: traffic OR sales"
     
     try:
         response = AZURE_OPENAI_CLIENT.chat.completions.create(
             model=AZURE_OPENAI_DEPLOYMENT_NAME,
             messages=[{"role": "user", "content": prompt}],
-            max_completion_tokens=8 # Extremely low
+            max_completion_tokens=5 # Just need one word
         )
         
         result = response.choices[0].message.content.strip().lower()
-        if "traffic" in result:
+        logger.info(f"LLM result: {result}")
+        
+        if "traffic" in result or "conversion" in result:
             return "traffic_conversion"
         else:
             return "sales_amount"
@@ -183,36 +202,46 @@ def get_metric_value_fast(conn, tool_name: str, store_id: int) -> Optional[float
         logger.error(f"Metric query error: {e}")
         return 0.0
 
-# STRATEGY 5: Token-optimized response generation
+# STRATEGY 5: Token-optimized response generation - FIXED
 def generate_rich_response(user_query: str, tool_name: str, metric_value: float, store_id: int) -> str:
-    """Generate rich responses with all details using minimal tokens"""
+    """Generate rich responses with all details using minimal tokens - DEBUGGED"""
+    
+    logger.info(f"Generating response for tool_name: {tool_name}, value: {metric_value}")
     
     measure_info = TOOL_NAME_TO_MEASURE.get(tool_name)
     if not measure_info:
+        logger.error(f"No measure info found for tool_name: {tool_name}")
         return f"Metric not found for store {store_id}."
     
     # Format value appropriately
     if tool_name == "sales_amount":
         formatted_value = f"${metric_value:,.2f}"
-        value_type = "currency"
-    else:
+    elif tool_name == "traffic_conversion":
         formatted_value = f"{metric_value:.3f}"
-        value_type = "decimal"
+    else:
+        formatted_value = f"{metric_value:.2f}"
     
-    # STRATEGY A: Template-based (0 response generation tokens)
-    # This matches your example format exactly
+    logger.info(f"Formatted value: {formatted_value}")
+    
+    # Get measure details
     measure_name = measure_info['measure_name']
     description = measure_info['description']
     
+    # Build base response matching your example format
     base_response = f"For store {store_id}, {measure_name} is defined as {description.lower()}, and the current {measure_name} value is {formatted_value}."
     
-    # Add contextual suggestions based on metric type
+    # Add metric-specific suggestions
     if tool_name == "sales_amount":
         suggestions = ' You might also ask: "How does this compare to last month?" or "What are my top performing products?"'
-    else: # traffic_conversion
+    elif tool_name == "traffic_conversion":
         suggestions = ' You might also ask: "What are the total store visits for my store?" or "How many sales transactions did we record to calculate this measure?"'
+    else:
+        suggestions = ' You might also ask: "How can I improve this metric?" or "What factors influence this measure?"'
     
-    return base_response + suggestions
+    final_response = base_response + suggestions
+    logger.info(f"Final response generated: {final_response[:100]}...")
+    
+    return final_response
 
 # STRATEGY B: If you want LLM enhancement (optional, costs ~40 tokens)
 def generate_llm_enhanced_response(user_query: str, tool_name: str, metric_value: float, store_id: int) -> str:
@@ -299,13 +328,19 @@ async def message_handler(turn_context: TurnContext):
             return
         
         # 1. Identify intent (keyword first, minimal LLM fallback)
+        logger.info(f"Processing user query: '{user_query}'")
+        
         tool_name = identify_metric_intent(user_query)
+        logger.info(f"Identified tool_name: {tool_name}")
+        
         if not tool_name:
             await turn_context.send_activity("Ask about sales amount or traffic conversion.")
             return
         
         # 2. Get metric value
         metric_value = get_metric_value_fast(conn, tool_name, session.store_id)
+        logger.info(f"Retrieved metric_value: {metric_value} for tool_name: {tool_name}")
+        
         if metric_value is None:
             await turn_context.send_activity(f"Cannot retrieve data for store {session.store_id}.")
             return
