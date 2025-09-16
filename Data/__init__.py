@@ -126,12 +126,33 @@ def get_user_data(user_id: str, conn) -> Optional[Dict[str, Any]]:
         "store_id": user_row.iloc[0]['store_id']
     }
 
-# STRATEGY 3: Ultra-efficient intent recognition - FIXED
+# Helper function to generate available metrics list
+def get_available_metrics_list() -> str:
+    """Generate user-friendly list of available metrics"""
+    metrics = [item['measure_name'] for item in KNOWLEDGE_BASE_DATA]
+    if len(metrics) <= 2:
+        return " and ".join(metrics)
+    else:
+        return ", ".join(metrics[:-1]) + f", and {metrics[-1]}"
+
+# STRATEGY 3: Ultra-efficient intent recognition - ENHANCED FOR UNRELATED QUERIES
 def identify_metric_intent(user_query: str) -> Optional[str]:
-    """Hybrid approach: Keyword matching first (0 tokens), minimal LLM fallback"""
+    """Enhanced: Returns None for unrelated queries, shows available options"""
     
     query_lower = user_query.lower()
     logger.info(f"Intent recognition for query: '{user_query}'")
+    
+    # Pre-filter obvious unrelated queries (0 tokens)
+    unrelated_patterns = [ 
+        "how are you", "what's your name", "weather", "time",
+        "joke", "story", "recipe", "news", "sports", "music"
+    ]
+    
+    # Quick unrelated query detection
+    for pattern in unrelated_patterns:
+        if pattern in query_lower and len(user_query.strip()) < 50:
+            logger.info(f"Detected unrelated pattern: {pattern}")
+            return "UNRELATED" # Special flag for unrelated queries
     
     # Phase 1: Direct keyword matching (NO TOKENS)
     # Check for traffic/conversion keywords FIRST
@@ -154,32 +175,35 @@ def identify_metric_intent(user_query: str) -> Optional[str]:
             logger.info(f"Alias match found: {alias} -> {tool_name}")
             return tool_name
     
-    # Phase 2: Minimal LLM only if keyword matching fails
+    # Phase 2: Smarter LLM fallback for ambiguous queries
     if not AZURE_OPENAI_CLIENT:
-        logger.info("No OpenAI client, defaulting to sales_amount")
-        return "sales_amount"
+        return None # Let main handler provide helpful response
         
-    # ULTRA-MINIMAL prompt (only ~15 tokens)
-    prompt = f"Query: '{user_query}'\nIs this about traffic/conversion or sales/revenue?\nAnswer: traffic OR sales"
+    # Enhanced prompt to detect unrelated queries
+    prompt = f"Query: '{user_query}'\nIs this about store metrics (sales/traffic) or something else?\nAnswer: METRICS or UNRELATED"
     
     try:
         response = AZURE_OPENAI_CLIENT.chat.completions.create(
             model=AZURE_OPENAI_DEPLOYMENT_NAME,
             messages=[{"role": "user", "content": prompt}],
-            max_completion_tokens=5 # Just need one word
+            max_completion_tokens=8
         )
         
         result = response.choices[0].message.content.strip().lower()
         logger.info(f"LLM result: {result}")
         
-        if "traffic" in result or "conversion" in result:
+        if "unrelated" in result or "something else" in result:
+            return "UNRELATED"
+        elif "traffic" in result:
             return "traffic_conversion"
-        else:
+        elif "sales" in result or "metrics" in result:
             return "sales_amount"
+        else:
+            return None # Ambiguous, let handler provide options
             
     except Exception as e:
         logger.error(f"LLM intent error: {e}")
-        return "sales_amount"
+        return None
 
 # STRATEGY 4: Fast data retrieval
 def get_metric_value_fast(conn, tool_name: str, store_id: int) -> Optional[float]:
@@ -202,9 +226,9 @@ def get_metric_value_fast(conn, tool_name: str, store_id: int) -> Optional[float
         logger.error(f"Metric query error: {e}")
         return 0.0
 
-# STRATEGY 5: Token-optimized response generation - FIXED
+# STRATEGY 5: Token-optimized response generation
 def generate_rich_response(user_query: str, tool_name: str, metric_value: float, store_id: int) -> str:
-    """Generate rich responses with all details using minimal tokens - DEBUGGED"""
+    """Generate rich responses with all details using minimal tokens"""
     
     logger.info(f"Generating response for tool_name: {tool_name}, value: {metric_value}")
     
@@ -243,38 +267,6 @@ def generate_rich_response(user_query: str, tool_name: str, metric_value: float,
     
     return final_response
 
-# STRATEGY B: If you want LLM enhancement (optional, costs ~40 tokens)
-def generate_llm_enhanced_response(user_query: str, tool_name: str, metric_value: float, store_id: int) -> str:
-    """LLM-enhanced response with strict token limits"""
-    
-    measure_info = TOOL_NAME_TO_MEASURE.get(tool_name)
-    if not measure_info:
-        return f"Metric not found for store {store_id}."
-    
-    # Format value
-    if tool_name == "sales_amount":
-        formatted_value = f"${metric_value:,.2f}"
-    else:
-        formatted_value = f"{metric_value:.3f}"
-    
-    # ULTRA-COMPACT prompt with all essential info
-    prompt = f"""Store {store_id}: {measure_info['measure_name']} = {formatted_value}
-Def: {measure_info['description']}
-DAX: {measure_info['dax_formula']}
-Answer user + suggest 2 related questions."""
-    
-    try:
-        response = AZURE_OPENAI_CLIENT.chat.completions.create(
-            model=AZURE_OPENAI_DEPLOYMENT_NAME,
-            messages=[{"role": "user", "content": prompt}],
-            max_completion_tokens=80 # Strict limit but allows rich response
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        logger.error(f"LLM enhancement error: {e}")
-        # Fallback to template
-        return generate_rich_response(user_query, tool_name, metric_value, store_id)
-
 # Session management
 class UserSession:
     def __init__(self, user_id: str, role: str, store_id: int):
@@ -294,9 +286,9 @@ def get_user_session(user_id: str, conn) -> Optional[UserSession]:
             )
     return _user_sessions.get(user_id)
 
-# Optimized message handler
+# Main message handler
 async def message_handler(turn_context: TurnContext):
-    """Ultra-optimized message handler with full information"""
+    """Ultra-optimized message handler with enhanced unrelated query handling"""
     
     if turn_context.activity.type != ActivityTypes.message:
         return
@@ -306,7 +298,7 @@ async def message_handler(turn_context: TurnContext):
     
     # Quick validation
     if not user_query or len(user_query) > 300:
-        await turn_context.send_activity("Please ask a specific question about sales or traffic conversion.")
+        await turn_context.send_activity("Please ask a specific question about store metrics.")
         return
     
     conn = None
@@ -327,14 +319,37 @@ async def message_handler(turn_context: TurnContext):
             await turn_context.send_activity("Access denied. Contact support.")
             return
         
-        # 1. Identify intent (keyword first, minimal LLM fallback)
+        # 1. Identify intent with enhanced unrelated query handling
         logger.info(f"Processing user query: '{user_query}'")
         
         tool_name = identify_metric_intent(user_query)
         logger.info(f"Identified tool_name: {tool_name}")
         
+        # Handle unrelated queries with helpful response
+        if tool_name == "UNRELATED":
+            available_metrics = get_available_metrics_list()
+            unrelated_response = f"""Sorry, I couldn't provide you that information. Perhaps I can help you with these details:Available metrics for your store:
+            • {available_metrics}
+            Examples of questions I can answer:
+            • "What are my sales for this month?"
+            • "How's the traffic conversion rate?"
+            • "Show me the current sales amount"
+            What would you like to know about your store performance?"""
+            
+            await turn_context.send_activity(unrelated_response)
+            return
+        
+        # Handle ambiguous/no match queries  
         if not tool_name:
-            await turn_context.send_activity("Ask about sales amount or traffic conversion.")
+            available_metrics = get_available_metrics_list()
+            no_match_response = f"""I'm not sure what metric you're asking about. I can help you with: {available_metrics}.
+            Try asking:
+            • "What are my current sales?"
+            • "How's my traffic conversion?"
+            • "Show me store performance data"
+            What specific metric would you like to see?"""
+            
+            await turn_context.send_activity(no_match_response)
             return
         
         # 2. Get metric value
@@ -345,12 +360,8 @@ async def message_handler(turn_context: TurnContext):
             await turn_context.send_activity(f"Cannot retrieve data for store {session.store_id}.")
             return
         
-        # 3. Generate response 
-        # Option A: Template-only (0 LLM tokens for response)
+        # 3. Generate response using template (0 LLM tokens for response)
         response = generate_rich_response(user_query, tool_name, metric_value, session.store_id)
-        
-        # Option B: LLM-enhanced (uncomment to use ~40 tokens)
-        # response = generate_llm_enhanced_response(user_query, tool_name, metric_value, session.store_id)
         
         # 4. Send response
         await turn_context.send_activity(response)
