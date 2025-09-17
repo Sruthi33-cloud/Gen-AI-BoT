@@ -6,35 +6,30 @@ import sys
 import asyncio
 from typing import Dict, List, Optional, Any
 
-# Bot Framework SDK Libraries
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
 from botbuilder.schema import Activity, ActivityTypes
 from botframework.connector.auth import MicrosoftAppCredentials
 
 import pandas as pd
-import requests
 import snowflake.connector
-import random
 from openai import AzureOpenAI
-from time import sleep
 
-# Setup logging
+# Logging
 logger = logging.getLogger("azure")
 logger.setLevel(logging.INFO)
-handler = logging.StreamHandler(sys.stdout)
-formatter = logging.Formatter("[%(levelname)s] %(asctime)s - %(message)s")
-handler.setFormatter(formatter)
 if not logger.hasHandlers():
-    logger.addHandler(handler)
+    h = logging.StreamHandler(sys.stdout)
+    h.setFormatter(logging.Formatter("[%(levelname)s] %(asctime)s - %(message)s"))
+    logger.addHandler(h)
 
-# Single-tenant credentials class
+# Single-tenant auth
 class SingleTenantAppCredentials(MicrosoftAppCredentials):
     def __init__(self, app_id: str, password: str, tenant_id: str):
         super().__init__(app_id, password)
         self.tenant_id = tenant_id
         self.oauth_endpoint = f"https://login.microsoftonline.com/{tenant_id}"
 
-# Environment variables
+# Env vars
 APP_ID = os.environ.get("MicrosoftAppId", "")
 APP_PASSWORD = os.environ.get("MicrosoftAppPassword", "")
 APP_TYPE = os.environ.get("MicrosoftAppType", "SingleTenant")
@@ -51,7 +46,7 @@ SNOWFLAKE_WAREHOUSE = os.environ.get("SNOWFLAKE_WAREHOUSE")
 SNOWFLAKE_DATABASE = os.environ.get("SNOWFLAKE_DATABASE")
 SNOWFLAKE_SCHEMA = os.environ.get("SNOWFLAKE_SCHEMA")
 
-# Azure OpenAI client with correct API version
+# OpenAI client
 try:
     AZURE_OPENAI_CLIENT = AzureOpenAI(
         api_key=AZURE_OPENAI_KEY,
@@ -63,16 +58,14 @@ except Exception as e:
     logger.error(f"Error initializing AzureOpenAI client: {e}")
     AZURE_OPENAI_CLIENT = None
 
-# STRATEGY 1: Load full knowledge base but optimize usage
+# Knowledge base
 def load_knowledge_base():
-    """Load your complete JSON knowledge base"""
     try:
         path = os.path.join(os.path.dirname(__file__), "knowledge_base.json")
         with open(path, "r") as f:
             return json.load(f)
     except Exception as e:
         logger.error(f"Error loading knowledge_base.json: {e}")
-        # Fallback to your provided structure
         return [
             {
                 "measure_name": "Sales Amount",
@@ -91,17 +84,17 @@ def load_knowledge_base():
         ]
 
 KNOWLEDGE_BASE_DATA = load_knowledge_base()
-
-# STRATEGY 2: Create lookup dictionaries for fast access
 TOOL_NAME_TO_MEASURE = {item['tool_name']: item for item in KNOWLEDGE_BASE_DATA}
 ALIAS_TO_TOOL_NAME = {}
 for item in KNOWLEDGE_BASE_DATA:
     for alias in item['aliases']:
         ALIAS_TO_TOOL_NAME[alias.lower()] = item['tool_name']
 
+# Cache for intent recognition results - THIS IS THE KEY OPTIMIZATION
+_intent_cache = {}
+
 # Cached data
 _rbac_cache = None
-_territory_cache = None
 
 def get_cached_rbac_data(conn):
     global _rbac_cache
@@ -116,7 +109,6 @@ def get_cached_rbac_data(conn):
     return _rbac_cache
 
 def get_user_data(user_id: str, conn) -> Optional[Dict[str, Any]]:
-    """Get user access data efficiently"""
     rbac_df = get_cached_rbac_data(conn)
     user_row = rbac_df[rbac_df['user_id'] == user_id]
     if user_row.empty:
@@ -126,88 +118,96 @@ def get_user_data(user_id: str, conn) -> Optional[Dict[str, Any]]:
         "store_id": user_row.iloc[0]['store_id']
     }
 
-# Helper function to generate available metrics list
 def get_available_metrics_list() -> str:
-    """Generate user-friendly list of available metrics"""
     metrics = [item['measure_name'] for item in KNOWLEDGE_BASE_DATA]
     if len(metrics) <= 2:
         return " and ".join(metrics)
     else:
         return ", ".join(metrics[:-1]) + f", and {metrics[-1]}"
 
-# STRATEGY 3: Ultra-efficient intent recognition - ENHANCED FOR UNRELATED QUERIES
+# ULTRA-OPTIMIZED intent recognition with caching and minimal tokens
 def identify_metric_intent(user_query: str) -> Optional[str]:
-    """Enhanced: Returns None for unrelated queries, shows available options"""
+    
+    # Check cache first - ZERO API CALLS for repeated queries
+    query_key = user_query.lower().strip()
+    if query_key in _intent_cache:
+        logger.info(f"Cache hit for query: '{user_query}' -> {_intent_cache[query_key]}")
+        return _intent_cache[query_key]
     
     query_lower = user_query.lower()
     logger.info(f"Intent recognition for query: '{user_query}'")
     
-    # Pre-filter obvious unrelated queries (0 tokens)
-    unrelated_patterns = [ 
+    # Pre-filter unrelated queries - NO API CALL
+    unrelated_patterns = [
+        "hello", "hi", "hey", "good morning", "good afternoon", 
         "how are you", "what's your name", "weather", "time",
         "joke", "story", "recipe", "news", "sports", "music"
     ]
     
-    # Quick unrelated query detection
     for pattern in unrelated_patterns:
         if pattern in query_lower and len(user_query.strip()) < 50:
             logger.info(f"Detected unrelated pattern: {pattern}")
-            return "UNRELATED" # Special flag for unrelated queries
+            _intent_cache[query_key] = "UNRELATED"
+            return "UNRELATED"
     
-    # Phase 1: Direct keyword matching (NO TOKENS)
-    # Check for traffic/conversion keywords FIRST
+    # Direct keyword matching - NO API CALL
     traffic_keywords = ["traffic", "conversion", "convert", "visits"]
     for keyword in traffic_keywords:
         if keyword in query_lower:
             logger.info(f"Traffic keyword match found: {keyword}")
+            _intent_cache[query_key] = "traffic_conversion"
             return "traffic_conversion"
     
-    # Check for sales keywords
     sales_keywords = ["sales", "revenue", "amount", "money", "dollar"]
     for keyword in sales_keywords:
         if keyword in query_lower:
             logger.info(f"Sales keyword match found: {keyword}")
+            _intent_cache[query_key] = "sales_amount"
             return "sales_amount"
     
-    # Check aliases from knowledge base
+    # Check aliases - NO API CALL
     for alias, tool_name in ALIAS_TO_TOOL_NAME.items():
         if alias in query_lower:
             logger.info(f"Alias match found: {alias} -> {tool_name}")
+            _intent_cache[query_key] = tool_name
             return tool_name
     
-    # Phase 2: Smarter LLM fallback for ambiguous queries
+    # MINIMAL TOKEN LLM fallback - ONLY when absolutely necessary
     if not AZURE_OPENAI_CLIENT:
-        return None # Let main handler provide helpful response
+        _intent_cache[query_key] = None
+        return None
         
-    # Enhanced prompt to detect unrelated queries
-    prompt = f"Query: '{user_query}'\nIs this about store metrics (sales/traffic) or something else?\nAnswer: METRICS or UNRELATED"
+    # ULTRA-MINIMAL PROMPT: Input ~2 tokens, Output 8 tokens = 10 total
+    prompt = f"'{user_query}' sales or traffic?"
     
     try:
         response = AZURE_OPENAI_CLIENT.chat.completions.create(
             model=AZURE_OPENAI_DEPLOYMENT_NAME,
             messages=[{"role": "user", "content": prompt}],
-            max_completion_tokens=8
+            max_completion_tokens=8 # Already set to 8
         )
         
         result = response.choices[0].message.content.strip().lower()
         logger.info(f"LLM result: {result}")
         
-        if "unrelated" in result or "something else" in result:
-            return "UNRELATED"
-        elif "traffic" in result:
+        # Parse minimal response
+        if "traffic" in result:
+            _intent_cache[query_key] = "traffic_conversion"
             return "traffic_conversion"
-        elif "sales" in result or "metrics" in result:
+        elif "sales" in result:
+            _intent_cache[query_key] = "sales_amount"  
             return "sales_amount"
         else:
-            return None # Ambiguous, let handler provide options
+            _intent_cache[query_key] = "UNRELATED"
+            return "UNRELATED"
             
     except Exception as e:
         logger.error(f"LLM intent error: {e}")
+        _intent_cache[query_key] = None
         return None
 
-# STRATEGY 4: Fast data retrieval
+# Fast data retrieval
 def get_metric_value_fast(conn, tool_name: str, store_id: int) -> Optional[float]:
-    """Fast metric retrieval"""
     try:
         if tool_name == "sales_amount":
             query = f"SELECT COALESCE(SUM(SalesAmount), 0) FROM ENTERPRISE.RETAIL_DATA.SALES_FACT WHERE SalesTerritoryKey = {store_id % 10}"
@@ -218,18 +218,15 @@ def get_metric_value_fast(conn, tool_name: str, store_id: int) -> Optional[float
             return float(result[0]) if result else 0.0
             
         elif tool_name == "traffic_conversion":
-            # Return example value - replace with your actual query
-            return 0.000 # Matches your example
+            return 0.000
             
         return None
     except Exception as e:
         logger.error(f"Metric query error: {e}")
         return 0.0
 
-# STRATEGY 5: Token-optimized response generation
+# Response generation - NO API CALLS
 def generate_rich_response(user_query: str, tool_name: str, metric_value: float, store_id: int) -> str:
-    """Generate rich responses with all details using minimal tokens"""
-    
     logger.info(f"Generating response for tool_name: {tool_name}, value: {metric_value}")
     
     measure_info = TOOL_NAME_TO_MEASURE.get(tool_name)
@@ -237,7 +234,7 @@ def generate_rich_response(user_query: str, tool_name: str, metric_value: float,
         logger.error(f"No measure info found for tool_name: {tool_name}")
         return f"Metric not found for store {store_id}."
     
-    # Format value appropriately
+    # Format value
     if tool_name == "sales_amount":
         formatted_value = f"${metric_value:,.2f}"
     elif tool_name == "traffic_conversion":
@@ -247,14 +244,11 @@ def generate_rich_response(user_query: str, tool_name: str, metric_value: float,
     
     logger.info(f"Formatted value: {formatted_value}")
     
-    # Get measure details
     measure_name = measure_info['measure_name']
     description = measure_info['description']
     
-    # Build base response matching your example format
     base_response = f"For store {store_id}, {measure_name} is defined as {description.lower()}, and the current {measure_name} value is {formatted_value}."
     
-    # Add metric-specific suggestions
     if tool_name == "sales_amount":
         suggestions = ' You might also ask: "How does this compare to last month?" or "What are my top performing products?"'
     elif tool_name == "traffic_conversion":
@@ -288,22 +282,18 @@ def get_user_session(user_id: str, conn) -> Optional[UserSession]:
 
 # Main message handler
 async def message_handler(turn_context: TurnContext):
-    """Ultra-optimized message handler with enhanced unrelated query handling"""
-    
     if turn_context.activity.type != ActivityTypes.message:
         return
     
     user_query = turn_context.activity.text.strip()
-    user_id = "victor" # Static for testing
+    user_id = "victor"
     
-    # Quick validation
     if not user_query or len(user_query) > 300:
         await turn_context.send_activity("Please ask a specific question about store metrics.")
         return
     
     conn = None
     try:
-        # Connect to Snowflake
         conn = snowflake.connector.connect(
             user=SNOWFLAKE_USER,
             password=SNOWFLAKE_PASSWORD,
@@ -313,23 +303,22 @@ async def message_handler(turn_context: TurnContext):
             schema=SNOWFLAKE_SCHEMA
         )
         
-        # Get user session
         session = get_user_session(user_id, conn)
         if not session:
             await turn_context.send_activity("Access denied. Contact support.")
             return
         
-        # 1. Identify intent with enhanced unrelated query handling
+        # Intent recognition with caching - MINIMAL API USAGE
         logger.info(f"Processing user query: '{user_query}'")
         
         tool_name = identify_metric_intent(user_query)
         logger.info(f"Identified tool_name: {tool_name}")
         
-        # Handle unrelated queries with helpful response
         if tool_name == "UNRELATED":
             available_metrics = get_available_metrics_list()
-            unrelated_response = f"""Sorry, I couldn't provide you that information. Perhaps I can help you with these details:Available metrics for your store:
-            • {available_metrics}
+            unrelated_response = f"""Sorry, I couldn't provide you that information. Perhaps I can help you with these details:
+            Available metrics for your store:
+            {available_metrics}
             Examples of questions I can answer:
             • "What are my sales for this month?"
             • "How's the traffic conversion rate?"
@@ -339,7 +328,6 @@ async def message_handler(turn_context: TurnContext):
             await turn_context.send_activity(unrelated_response)
             return
         
-        # Handle ambiguous/no match queries  
         if not tool_name:
             available_metrics = get_available_metrics_list()
             no_match_response = f"""I'm not sure what metric you're asking about. I can help you with: {available_metrics}.
@@ -352,7 +340,6 @@ async def message_handler(turn_context: TurnContext):
             await turn_context.send_activity(no_match_response)
             return
         
-        # 2. Get metric value
         metric_value = get_metric_value_fast(conn, tool_name, session.store_id)
         logger.info(f"Retrieved metric_value: {metric_value} for tool_name: {tool_name}")
         
@@ -360,13 +347,11 @@ async def message_handler(turn_context: TurnContext):
             await turn_context.send_activity(f"Cannot retrieve data for store {session.store_id}.")
             return
         
-        # 3. Generate response using template (0 LLM tokens for response)
+        # Generate response - NO API CALLS
         response = generate_rich_response(user_query, tool_name, metric_value, session.store_id)
         
-        # 4. Send response
         await turn_context.send_activity(response)
         
-        # Update session
         session.last_queries.append({"query": user_query, "metric": tool_name})
         if len(session.last_queries) > 3:
             session.last_queries.pop(0)
@@ -378,7 +363,7 @@ async def message_handler(turn_context: TurnContext):
         if conn:
             conn.close()
 
-# Main function with single-tenant auth
+# Main function
 def main(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == 'GET':
         return func.HttpResponse("Bot endpoint is healthy", status_code=200)
@@ -391,7 +376,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         activity = Activity.deserialize(req_json)
         auth_header = req.headers.get('Authorization') or req.headers.get('authorization') or ''
 
-        # Single-tenant adapter setup
         if APP_TYPE == "SingleTenant" and APP_TENANT_ID:
             credentials = SingleTenantAppCredentials(APP_ID, APP_PASSWORD, APP_TENANT_ID)
         else:
@@ -404,7 +388,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         adapter = BotFrameworkAdapter(settings)
         adapter._credentials = credentials
 
-        # Process activity
         asyncio_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(asyncio_loop)
         response = asyncio_loop.run_until_complete(
