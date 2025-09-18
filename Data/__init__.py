@@ -138,8 +138,7 @@ def identify_metric_intent(user_query: str) -> Optional[str]:
     logger.info(f"Intent recognition for query: '{user_query}'")
     
     # Pre-filter unrelated queries - NO API CALL
-    unrelated_patterns = [
-        "hello", "hi", "hey", "good morning", "good afternoon", 
+    unrelated_patterns = [ 
         "how are you", "what's your name", "weather", "time",
         "joke", "story", "recipe", "news", "sports", "music"
     ]
@@ -210,7 +209,8 @@ def identify_metric_intent(user_query: str) -> Optional[str]:
 def get_metric_value_fast(conn, tool_name: str, store_id: int) -> Optional[float]:
     try:
         if tool_name == "sales_amount":
-            query = f"SELECT COALESCE(SUM(SalesAmount), 0) FROM ENTERPRISE.RETAIL_DATA.SALES_FACT WHERE SalesTerritoryKey = {store_id % 10}"
+            query = f"select coalesce(sum(salesamount),0) from ENTERPRISE.RETAIL_DATA.SALES_FACT join ENTERPRISE.RETAIL_DATA.RBAC_WORK_TABLE
+            on ENTERPRISE.RETAIL_DATA.SALES_FACT.ORDERDATE = ENTERPRISE.RETAIL_DATA.RBAC_WORK_TABLE.valid_from"
             cur = conn.cursor()
             cur.execute(query)
             result = cur.fetchone()
@@ -402,3 +402,4 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logger.error(f"Error processing request: {e}")
         return func.HttpResponse("Internal error.", status_code=500)
+
