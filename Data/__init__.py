@@ -162,7 +162,7 @@ class AdaptiveQueryBuilder:
         FROM ENTERPRISE.RETAIL_DATA.SALES_FACT 
         JOIN ENTERPRISE.RETAIL_DATA.RBAC_WORK_TABLE
         ON ENTERPRISE.RETAIL_DATA.SALES_FACT.{sales_date_col} = ENTERPRISE.RETAIL_DATA.RBAC_WORK_TABLE.{rbac_date_col}
-        """
+        where ENTERPRISE.RETAIL_DATA.RBAC_WORK_TABLE.USER_ID = 'victor' """
         
         logger.info(f"Built adaptive query: {query}")
         return query
@@ -248,7 +248,6 @@ def identify_metric_intent(user_query: str) -> Optional[str]:
     
     # Pre-filter unrelated queries
     unrelated_patterns = [
-        "hello", "hi", "hey", "good morning", "good afternoon", 
         "how are you", "what's your name", "weather", "time",
         "joke", "story", "recipe", "news", "sports", "music"
     ]
@@ -318,14 +317,19 @@ def identify_metric_intent(user_query: str) -> Optional[str]:
 def get_metric_value_fast(conn, tool_name: str, store_id: int, user_id: str = "victor") -> Optional[float]:
     """Schema-adaptive data retrieval that automatically handles column changes"""
     try:
-        # Check for access control based on user's store ID
         user_session = get_user_session(user_id, conn)
         if not user_session:
             return "Access denied"
 
         if store_id != user_session.store_id:
-            # Return the custom message directly
-            return "Sorry I couldn't Provide that Information. Perhaps I can help you to find the relevant data for your store"
+            access_denied_response = """Sorry I couldn't Provide that Information. Perhaps I can help you to find the relevant data for your store
+            Examples of questions I can answer:
+            • "What are my sales for this month?"
+            • "How's the traffic conversion rate?"
+            • "Show me the current sales amount"
+            What would you like to know about your store performance?"""
+            
+            return access_denied_response
 
         if tool_name == "sales_amount":
             # Create adaptive query builder
@@ -541,3 +545,4 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logger.error(f"Error processing request: {e}")
         return func.HttpResponse("Internal error.", status_code=500)
+
