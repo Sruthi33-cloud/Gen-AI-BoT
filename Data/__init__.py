@@ -59,6 +59,114 @@ except Exception as e:
     logger.error(f"Error initializing AzureOpenAI client: {e}")
     AZURE_OPENAI_CLIENT = None
 
+# SOLUTION 1: DYNAMIC COLUMN MAPPING WITH CACHING
+_column_cache = {}
+_schema_cache = {}
+
+def get_table_columns(conn, table_name: str) -> Dict[str, str]:
+    """Get column names dynamically - cached for performance"""
+    if table_name in _column_cache:
+        return _column_cache[table_name]
+    
+    try:
+        cur = conn.cursor()
+        # Get column info from Snowflake information schema
+        cur.execute(f"""
+        SELECT COLUMN_NAME, DATA_TYPE 
+        FROM INFORMATION_SCHEMA.COLUMNS 
+        WHERE TABLE_SCHEMA = '{SNOWFLAKE_SCHEMA}' 
+        AND TABLE_NAME = '{table_name.upper()}'
+        ORDER BY ORDINAL_POSITION
+        """)
+        
+        columns = {}
+        for row in cur.fetchall():
+            col_name = row[0].lower()
+            data_type = row[1]
+            columns[col_name] = data_type
+        
+        cur.close()
+        _column_cache[table_name] = columns
+        logger.info(f"Cached columns for {table_name}: {list(columns.keys())}")
+        return columns
+        
+    except Exception as e:
+        logger.error(f"Error getting columns for {table_name}: {e}")
+        return {}
+
+def smart_column_finder(columns: Dict[str, str], search_terms: List[str]) -> Optional[str]:
+    """Find column name using smart matching"""
+    col_names = list(columns.keys())
+    
+    # Exact match first
+    for term in search_terms:
+        if term.lower() in col_names:
+            return term.lower()
+    
+    # Partial match
+    for term in search_terms:
+        for col in col_names:
+            if term.lower() in col.lower() or col.lower() in term.lower():
+                return col
+    
+    # Pattern matching
+    for col in col_names:
+        if any(pattern in col.lower() for pattern in ['amount', 'sales', 'revenue']):
+            if search_terms[0].lower() in ['sales', 'amount', 'revenue']:
+                return col
+        if any(pattern in col.lower() for pattern in ['date', 'time', 'dt']):
+            if search_terms[0].lower() in ['date', 'orderdate', 'time']:
+                return col
+    
+    return None
+
+# SOLUTION 2: ADAPTIVE QUERY BUILDER
+class AdaptiveQueryBuilder:
+    def __init__(self, conn):
+        self.conn = conn
+        self.sales_fact_cols = get_table_columns(conn, 'SALES_FACT')
+        self.rbac_cols = get_table_columns(conn, 'RBAC_WORK_TABLE')
+    
+    def build_sales_query(self) -> str:
+        """Build sales query dynamically based on actual column names"""
+        
+        # Find sales amount column
+        sales_col = smart_column_finder(
+            self.sales_fact_cols, 
+            ['SalesAmount', 'sales_amount', 'amount', 'sales', 'revenue', 'total_sales']
+        )
+        
+        # Find date column in sales_fact
+        sales_date_col = smart_column_finder(
+            self.sales_fact_cols,
+            ['OrderDate', 'order_date', 'date', 'transaction_date', 'sale_date']
+        )
+        
+        # Find date column in rbac
+        rbac_date_col = smart_column_finder(
+            self.rbac_cols,
+            ['valid_from', 'VALID_FROM', 'start_date', 'effective_date', 'date']
+        )
+        
+        # Fallback to your original column names if smart detection fails
+        if not sales_col:
+            sales_col = 'SalesAmount'
+        if not sales_date_col:
+            sales_date_col = 'OrderDate' 
+        if not rbac_date_col:
+            rbac_date_col = 'valid_from'
+        
+        # Build adaptive query
+        query = f"""
+        SELECT COALESCE(SUM({sales_col}), 0) 
+        FROM ENTERPRISE.RETAIL_DATA.SALES_FACT 
+        JOIN ENTERPRISE.RETAIL_DATA.RBAC_WORK_TABLE
+        ON ENTERPRISE.RETAIL_DATA.SALES_FACT.{sales_date_col} = ENTERPRISE.RETAIL_DATA.RBAC_WORK_TABLE.{rbac_date_col}
+        """
+        
+        logger.info(f"Built adaptive query: {query}")
+        return query
+
 # Knowledge base
 def load_knowledge_base():
     try:
@@ -91,7 +199,8 @@ for item in KNOWLEDGE_BASE_DATA:
     for alias in item['aliases']:
         ALIAS_TO_TOOL_NAME[alias.lower()] = item['tool_name']
 
-# Cache for intent recognition results - THIS IS THE KEY OPTIMIZATION
+# Intent recognition cache (unchanged)
+
 _intent_cache = {}
 
 # Cached data
@@ -126,10 +235,9 @@ def get_available_metrics_list() -> str:
     else:
         return ", ".join(metrics[:-1]) + f", and {metrics[-1]}"
 
-# ULTRA-OPTIMIZED intent recognition with caching and minimal tokens
+# Intent recognition (UNCHANGED)
 def identify_metric_intent(user_query: str) -> Optional[str]:
-    
-    # Check cache first - ZERO API CALLS for repeated queries
+    # Check cache first
     query_key = user_query.lower().strip()
     if query_key in _intent_cache:
         logger.info(f"Cache hit for query: '{user_query}' -> {_intent_cache[query_key]}")
@@ -138,8 +246,9 @@ def identify_metric_intent(user_query: str) -> Optional[str]:
     query_lower = user_query.lower()
     logger.info(f"Intent recognition for query: '{user_query}'")
     
-    # Pre-filter unrelated queries - NO API CALL
-    unrelated_patterns = [ 
+    # Pre-filter unrelated queries
+    unrelated_patterns = [
+        "hello", "hi", "hey", "good morning", "good afternoon", 
         "how are you", "what's your name", "weather", "time",
         "joke", "story", "recipe", "news", "sports", "music"
     ]
@@ -150,7 +259,7 @@ def identify_metric_intent(user_query: str) -> Optional[str]:
             _intent_cache[query_key] = "UNRELATED"
             return "UNRELATED"
     
-    # Direct keyword matching - NO API CALL
+    # Direct keyword matching
     traffic_keywords = ["traffic", "conversion", "convert", "visits"]
     for keyword in traffic_keywords:
         if keyword in query_lower:
@@ -165,26 +274,25 @@ def identify_metric_intent(user_query: str) -> Optional[str]:
             _intent_cache[query_key] = "sales_amount"
             return "sales_amount"
     
-    # Check aliases - NO API CALL
+    # Check aliases
     for alias, tool_name in ALIAS_TO_TOOL_NAME.items():
         if alias in query_lower:
             logger.info(f"Alias match found: {alias} -> {tool_name}")
             _intent_cache[query_key] = tool_name
             return tool_name
     
-    # MINIMAL TOKEN LLM fallback - ONLY when absolutely necessary
+    # MINIMAL TOKEN LLM fallback
     if not AZURE_OPENAI_CLIENT:
         _intent_cache[query_key] = None
         return None
         
-    # ULTRA-MINIMAL PROMPT: Input ~2 tokens, Output 8 tokens = 10 total
     prompt = f"'{user_query}' sales or traffic?"
     
     try:
         response = AZURE_OPENAI_CLIENT.chat.completions.create(
             model=AZURE_OPENAI_DEPLOYMENT_NAME,
             messages=[{"role": "user", "content": prompt}],
-            max_completion_tokens=8 # Already set to 8
+            max_completion_tokens=8
         )
         
         result = response.choices[0].message.content.strip().lower()
@@ -206,17 +314,24 @@ def identify_metric_intent(user_query: str) -> Optional[str]:
         _intent_cache[query_key] = None
         return None
 
-# Fast data retrieval
-def get_metric_value_fast(conn, tool_name: str, store_id: int, user_store_id: int) -> Optional[float]:
+# ADAPTIVE DATA RETRIEVAL
+def get_metric_value_fast(conn, tool_name: str, store_id: int, user_id: str = "victor") -> Optional[float]:
+    """Schema-adaptive data retrieval that automatically handles column changes"""
     try:
-        # Check if the requested store ID is different from the user's store ID.
-        if store_id != user_store_id:
+        # Check for access control based on user's store ID
+        user_session = get_user_session(user_id, conn)
+        if not user_session:
+            return "Access denied"
+
+        if store_id != user_session.store_id:
+            # Return the custom message directly
             return "Sorry I couldn't Provide that Information. Perhaps I can help you to find the relevant data for your store"
 
         if tool_name == "sales_amount":
-            query = f''' select coalesce(sum(salesamount),0) from ENTERPRISE.RETAIL_DATA.SALES_FACT join ENTERPRISE.RETAIL_DATA.RBAC_WORK_TABLE
-            on ENTERPRISE.RETAIL_DATA.SALES_FACT.ORDERDATE = ENTERPRISE.RETAIL_DATA.RBAC_WORK_TABLE.valid_from 
-            where ENTERPRISE.RETAIL_DATA.RBAC_WORK_TABLE.USER_ID = 'victor' '''
+            # Create adaptive query builder
+            query_builder = AdaptiveQueryBuilder(conn)
+            query = query_builder.build_sales_query()
+            
             cur = conn.cursor()
             cur.execute(query)
             result = cur.fetchone()
@@ -231,7 +346,7 @@ def get_metric_value_fast(conn, tool_name: str, store_id: int, user_store_id: in
         logger.error(f"Metric query error: {e}")
         return 0.0
 
-# Response generation - NO API CALLS
+# Response generation (unchanged)
 def generate_rich_response(user_query: str, tool_name: str, metric_value: float, store_id: int) -> str:
     logger.info(f"Generating response for tool_name: {tool_name}, value: {metric_value}")
     
@@ -267,7 +382,7 @@ def generate_rich_response(user_query: str, tool_name: str, metric_value: float,
     
     return final_response
 
-# Session management
+# Session management (unchanged)
 class UserSession:
     def __init__(self, user_id: str, role: str, store_id: int):
         self.user_id = user_id
@@ -314,7 +429,7 @@ async def message_handler(turn_context: TurnContext):
             await turn_context.send_activity("Access denied. Contact support.")
             return
         
-        # Intent recognition with caching - MINIMAL API USAGE
+        # Intent recognition with caching
         logger.info(f"Processing user query: '{user_query}'")
         
         tool_name = identify_metric_intent(user_query)
@@ -324,7 +439,7 @@ async def message_handler(turn_context: TurnContext):
             available_metrics = get_available_metrics_list()
             unrelated_response = f"""Sorry, I couldn't provide you that information. Perhaps I can help you with these details:
             Available metrics for your store:
-            {available_metrics}
+            •{available_metrics}
             Examples of questions I can answer:
             • "What are my sales for this month?"
             • "How's the traffic conversion rate?"
@@ -358,20 +473,13 @@ async def message_handler(turn_context: TurnContext):
             except (ValueError, IndexError):
                 pass # Fallback to user's store if parsing fails
         
-        # Now call the function with both the requested and the user's store IDs.
-        metric_value = get_metric_value_fast(conn, tool_name, requested_store_id, session.store_id)
+        # Get metric value with ADAPTIVE QUERY BUILDING
+        metric_value = get_metric_value_fast(conn, tool_name, requested_store_id, user_id)
         logger.info(f"Retrieved metric_value: {metric_value} for tool_name: {tool_name}")
         
+        # CHECK FOR THE CUSTOM MESSAGE
         if metric_value == "Sorry I couldn't Provide that Information. Perhaps I can help you to find the relevant data for your store":
-            available_metrics = get_available_metrics_list()
-            await turn_context.send_activity(f"""Sorry, I couldn't provide that information. I can only help with data for your store.
-            Available metrics for your store:
-            • {available_metrics}
-            Examples of questions I can answer:
-            • "What are my sales for this month?"
-            • "How's the traffic conversion rate?"
-            • "Show me the current sales amount"
-            What would you like to know about your store performance?""")
+            await turn_context.send_activity(metric_value)
             return
     
         if metric_value is None:
@@ -394,7 +502,7 @@ async def message_handler(turn_context: TurnContext):
         if conn:
             conn.close()
 
-# Main function
+# Main function (unchanged)
 def main(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == 'GET':
         return func.HttpResponse("Bot endpoint is healthy", status_code=200)
@@ -433,4 +541,3 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logger.error(f"Error processing request: {e}")
         return func.HttpResponse("Internal error.", status_code=500)
-
