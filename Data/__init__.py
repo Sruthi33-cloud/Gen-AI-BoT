@@ -481,8 +481,7 @@ async def message_handler(turn_context: TurnContext):
         metric_value = get_metric_value_fast(conn, tool_name, requested_store_id, user_id)
         logger.info(f"Retrieved metric_value: {metric_value} for tool_name: {tool_name}")
         
-        # CHECK FOR THE CUSTOM MESSAGE
-        if metric_value == "Sorry I couldn't Provide that Information. Perhaps I can help you to find the relevant data for your store":
+        if isinstance(metric_value, str):
             await turn_context.send_activity(metric_value)
             return
     
@@ -545,4 +544,5 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logger.error(f"Error processing request: {e}")
         return func.HttpResponse("Internal error.", status_code=500)
+
 
