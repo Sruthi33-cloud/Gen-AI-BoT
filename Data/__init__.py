@@ -5,6 +5,7 @@ import azure.functions as func
 import sys
 import asyncio
 from typing import Dict, List, Optional, Any
+import re
 
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
 from botbuilder.schema import Activity, ActivityTypes
@@ -206,8 +207,12 @@ def identify_metric_intent(user_query: str) -> Optional[str]:
         return None
 
 # Fast data retrieval
-def get_metric_value_fast(conn, tool_name: str, store_id: int) -> Optional[float]:
+def get_metric_value_fast(conn, tool_name: str, store_id: int, user_store_id: int) -> Optional[float]:
     try:
+        # Check if the requested store ID is different from the user's store ID.
+        if store_id != user_store_id:
+            return "Sorry I couldn't Provide that Information. Perhaps I can help you to find the relevant data for your store"
+
         if tool_name == "sales_amount":
             query = f''' select coalesce(sum(salesamount),0) from ENTERPRISE.RETAIL_DATA.SALES_FACT join ENTERPRISE.RETAIL_DATA.RBAC_WORK_TABLE
             on ENTERPRISE.RETAIL_DATA.SALES_FACT.ORDERDATE = ENTERPRISE.RETAIL_DATA.RBAC_WORK_TABLE.valid_from 
@@ -341,15 +346,40 @@ async def message_handler(turn_context: TurnContext):
             await turn_context.send_activity(no_match_response)
             return
         
-        metric_value = get_metric_value_fast(conn, tool_name, session.store_id)
+        # Extract store_id from user query if mentioned
+        requested_store_id = session.store_id  # Default to user's store
+        user_query_lower = user_query.lower()
+        
+        # Simple pattern matching for "store [number]"
+        store_match = re.search(r'store\s*#?(\d+)', user_query_lower)
+        if store_match:
+            try:
+                requested_store_id = int(store_match.group(1))
+            except (ValueError, IndexError):
+                pass # Fallback to user's store if parsing fails
+        
+        # Now call the function with both the requested and the user's store IDs.
+        metric_value = get_metric_value_fast(conn, tool_name, requested_store_id, session.store_id)
         logger.info(f"Retrieved metric_value: {metric_value} for tool_name: {tool_name}")
         
+        if metric_value == "ACCESS_DENIED":
+            available_metrics = get_available_metrics_list()
+            await turn_context.send_activity(f"""Sorry, I couldn't provide that information. I can only help with data for your store.
+            Available metrics for your store:
+            • {available_metrics}
+            Examples of questions I can answer:
+            • "What are my sales for this month?"
+            • "How's the traffic conversion rate?"
+            • "Show me the current sales amount"
+            What would you like to know about your store performance?""")
+            return
+    
         if metric_value is None:
-            await turn_context.send_activity(f"Cannot retrieve data for store {session.store_id}.")
+            await turn_context.send_activity(f"Cannot retrieve data for store {requested_store_id}.")
             return
         
         # Generate response - NO API CALLS
-        response = generate_rich_response(user_query, tool_name, metric_value, session.store_id)
+        response = generate_rich_response(user_query, tool_name, metric_value, requested_store_id)
         
         await turn_context.send_activity(response)
         
@@ -403,6 +433,3 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logger.error(f"Error processing request: {e}")
         return func.HttpResponse("Internal error.", status_code=500)
-
-
-
