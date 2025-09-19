@@ -362,7 +362,7 @@ async def message_handler(turn_context: TurnContext):
         metric_value = get_metric_value_fast(conn, tool_name, requested_store_id, session.store_id)
         logger.info(f"Retrieved metric_value: {metric_value} for tool_name: {tool_name}")
         
-        if metric_value == "ACCESS_DENIED":
+        if metric_value == "Sorry I couldn't Provide that Information. Perhaps I can help you to find the relevant data for your store":
             available_metrics = get_available_metrics_list()
             await turn_context.send_activity(f"""Sorry, I couldn't provide that information. I can only help with data for your store.
             Available metrics for your store:
@@ -433,3 +433,4 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logger.error(f"Error processing request: {e}")
         return func.HttpResponse("Internal error.", status_code=500)
+
