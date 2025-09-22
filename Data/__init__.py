@@ -314,7 +314,7 @@ def identify_metric_intent(user_query: str) -> Optional[str]:
         return None
 
 # ADAPTIVE DATA RETRIEVAL
-def get_metric_value_fast(conn, tool_name: str, store_id: int, user_id: str = "victor") -> Optional[float]:
+def get_metric_value_fast(conn, tool_name: str, store_id: int, user_id: str, query: str) -> Optional[float]:
     """Schema-adaptive data retrieval that automatically handles column changes"""
     try:
         user_session = get_user_session(user_id, conn)
@@ -332,10 +332,6 @@ def get_metric_value_fast(conn, tool_name: str, store_id: int, user_id: str = "v
             return access_denied_response
 
         if tool_name == "sales_amount":
-            # Create adaptive query builder
-            query_builder = AdaptiveQueryBuilder(conn)
-            query = query_builder.build_sales_query()
-            
             cur = conn.cursor()
             cur.execute(query)
             result = cur.fetchone()
@@ -550,6 +546,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logger.error(f"Error processing request: {e}")
         return func.HttpResponse("Internal error.", status_code=500)
+
 
 
 
