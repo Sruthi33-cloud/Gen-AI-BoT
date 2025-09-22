@@ -59,7 +59,7 @@ except Exception as e:
     logger.error(f"Error initializing AzureOpenAI client: {e}")
     AZURE_OPENAI_CLIENT = None
 
-
+# SOLUTION: PURELY ROBUST DATA-TYPE-BASED COLUMN DETECTION
 _column_cache = {}
 
 def get_table_columns(conn, table_name: str) -> Dict[str, str]:
@@ -80,8 +80,9 @@ def get_table_columns(conn, table_name: str) -> Dict[str, str]:
 
         columns = {}
         for row in cur.fetchall():
-            col_name = row[0]  # Keep original case
-            data_type = row[1].upper()  # Normalize data type for comparison
+            # Store column names in their original case, as Snowflake is case-sensitive
+            col_name = row[0]
+            data_type = row[1].upper()
             columns[col_name] = data_type
         
         cur.close()
@@ -104,10 +105,11 @@ def find_column_by_data_type(columns: Dict[str, str], data_type_patterns: List[s
                 return col_name
     return None
 
-
+# THE NEW PURELY ROBUST QUERY BUILDER
 class RobustQueryBuilder:
     """
-    This approach uses DATABASE METADATA
+    This approach uses DATABASE METADATA instead of guessing column names.
+    It's bulletproof against any naming convention changes.
     """
     def __init__(self, conn):
         self.conn = conn
@@ -158,7 +160,7 @@ class RobustQueryBuilder:
         
         return query
 
-# Knowledge base (unchanged)
+# Knowledge base
 def load_knowledge_base():
     try:
         path = os.path.join(os.path.dirname(__file__), "knowledge_base.json")
@@ -190,9 +192,11 @@ for item in KNOWLEDGE_BASE_DATA:
     for alias in item['aliases']:
         ALIAS_TO_TOOL_NAME[alias.lower()] = item['tool_name']
 
+# Intent recognition cache
 _intent_cache = {}
 
 def get_user_data(user_id: str, conn) -> Optional[Dict[str, Any]]:
+    # This function now always queries the database to get the latest data
     query = "SELECT USER_ID, ROLE, STORE_ID FROM ENTERPRISE.RETAIL_DATA.RBAC_WORK_TABLE"
     try:
         cur = conn.cursor()
@@ -365,7 +369,7 @@ def generate_rich_response(user_query: str, tool_name: str, metric_value: float,
     
     return final_response
 
-# Session management
+# Session management (unchanged)
 class UserSession:
     def __init__(self, user_id: str, role: str, store_id: int):
         self.user_id = user_id
@@ -390,7 +394,7 @@ async def message_handler(turn_context: TurnContext):
         return
     
     user_query = turn_context.activity.text.strip()
-    user_id = "victor" 
+    user_id = "victor" # NOTE: Hardcoded user ID - should be dynamic in a production app.
     
     if not user_query or len(user_query) > 300:
         await turn_context.send_activity("Please ask a specific question about store metrics.")
@@ -490,7 +494,7 @@ async def message_handler(turn_context: TurnContext):
         if conn:
             conn.close()
 
-# Main function
+# Main function (unchanged)
 def main(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == 'GET':
         return func.HttpResponse("Bot endpoint is healthy", status_code=200)
