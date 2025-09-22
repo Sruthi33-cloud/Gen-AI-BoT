@@ -59,105 +59,112 @@ except Exception as e:
     logger.error(f"Error initializing AzureOpenAI client: {e}")
     AZURE_OPENAI_CLIENT = None
 
-# SOLUTION: PURELY ROBUST DATA-TYPE-BASED COLUMN DETECTION
+# SOLUTION 1: DYNAMIC COLUMN MAPPING WITH CACHING
 _column_cache = {}
+_schema_cache = {}
 
 def get_table_columns(conn, table_name: str) -> Dict[str, str]:
-    """Get column names and data types dynamically - cached for performance"""
+    """Get column names dynamically - cached for performance"""
     if table_name in _column_cache:
         return _column_cache[table_name]
-
+    
     try:
         cur = conn.cursor()
-        # Get column info with data types from Snowflake information schema
+        # Get column info from Snowflake information schema
         cur.execute(f"""
-        SELECT COLUMN_NAME, DATA_TYPE
-        FROM INFORMATION_SCHEMA.COLUMNS
-        WHERE TABLE_SCHEMA = '{SNOWFLAKE_SCHEMA}'
+        SELECT COLUMN_NAME, DATA_TYPE 
+        FROM INFORMATION_SCHEMA.COLUMNS 
+        WHERE TABLE_SCHEMA = '{SNOWFLAKE_SCHEMA}' 
         AND TABLE_NAME = '{table_name.upper()}'
         ORDER BY ORDINAL_POSITION
         """)
-
+        
         columns = {}
         for row in cur.fetchall():
-            # Store column names in their original case, as Snowflake is case-sensitive
-            col_name = row[0]
-            data_type = row[1].upper()
+            col_name = row[0].lower()
+            data_type = row[1]
             columns[col_name] = data_type
         
         cur.close()
         _column_cache[table_name] = columns
-        logger.info(f"Cached columns for {table_name}: {[(name, dtype) for name, dtype in columns.items()]}")
+        logger.info(f"Cached columns for {table_name}: {list(columns.keys())}")
         return columns
-
+        
     except Exception as e:
         logger.error(f"Error getting columns for {table_name}: {e}")
         return {}
+
+def smart_column_finder(columns: Dict[str, str], search_terms: List[str]) -> Optional[str]:
+    """Find column name using smart matching"""
+    col_names = list(columns.keys())
     
-def find_column_by_data_type(columns: Dict[str, str], data_type_patterns: List[str]) -> Optional[str]:
-    """
-    Find column by data type.
-    """
-    for col_name, data_type in columns.items():
-        for pattern in data_type_patterns:
-            if pattern.upper() in data_type.upper():
-                logger.info(f"Found column '{col_name}' with data type '{data_type}' matching pattern '{pattern}'")
-                return col_name
+    # Exact match first
+    for term in search_terms:
+        if term.lower() in col_names:
+            return term.lower()
+    
+    # Partial match
+    for term in search_terms:
+        for col in col_names:
+            if term.lower() in col.lower() or col.lower() in term.lower():
+                return col
+    
+    # Pattern matching
+    for col in col_names:
+        if any(pattern in col.lower() for pattern in ['amount', 'sales', 'revenue']):
+            if search_terms[0].lower() in ['sales', 'amount', 'revenue']:
+                return col
+        if any(pattern in col.lower() for pattern in ['date', 'time', 'dt']):
+            if search_terms[0].lower() in ['date', 'orderdate', 'time']:
+                return col
+    
     return None
 
-# THE NEW PURELY ROBUST QUERY BUILDER
-class RobustQueryBuilder:
-    """
-    This approach uses DATABASE METADATA instead of guessing column names.
-    It's bulletproof against any naming convention changes.
-    """
+# SOLUTION 2: ADAPTIVE QUERY BUILDER
+class AdaptiveQueryBuilder:
     def __init__(self, conn):
         self.conn = conn
         self.sales_fact_cols = get_table_columns(conn, 'SALES_FACT')
         self.rbac_cols = get_table_columns(conn, 'RBAC_WORK_TABLE')
     
-    def build_sales_query(self) -> Optional[str]:
-        """
-        Build query using DATA TYPES to identify columns - works with ANY column names!
-        """
-        # Step 1: Find the AMOUNT column using data type
-        sales_amount_col = find_column_by_data_type(self.sales_fact_cols,
-            ['NUMBER', 'DECIMAL', 'FLOAT', 'NUMERIC', 'REAL', 'DOUBLE']
-        )
-
-        # Step 2: Find DATE columns for joining
-        sales_date_col = find_column_by_data_type(self.sales_fact_cols,
-            ['DATE', 'TIMESTAMP', 'TIME', 'DATETIME']
-        )
-        rbac_date_col = find_column_by_data_type(self.rbac_cols,
-            ['DATE', 'TIMESTAMP', 'TIME', 'DATETIME']
+    def build_sales_query(self) -> str:
+        """Build sales query dynamically based on actual column names"""
+        
+        # Find sales amount column
+        sales_col = smart_column_finder(
+            self.sales_fact_cols, 
+            ['SalesAmount', 'sales_amount', 'amount', 'sales', 'revenue', 'total_sales']
         )
         
-        # Step 3: Validate we found required columns
-        if not sales_amount_col:
-            logger.error("No numeric column found in SALES_FACT table")
-            return None
+        # Find date column in sales_fact
+        sales_date_col = smart_column_finder(
+            self.sales_fact_cols,
+            ['OrderDate', 'order_date', 'date', 'transaction_date', 'sale_date']
+        )
+        
+        # Find date column in rbac
+        rbac_date_col = smart_column_finder(
+            self.rbac_cols,
+            ['valid_from', 'VALID_FROM', 'start_date', 'effective_date', 'date']
+        )
+        
+        # Fallback to your original column names if smart detection fails
+        if not sales_col:
+            sales_col = 'SalesAmount'
         if not sales_date_col:
-            logger.error("No date column found in SALES_FACT table")
-            return None
+            sales_date_col = 'OrderDate' 
         if not rbac_date_col:
-            logger.error("No date column found in RBAC_WORK_TABLE")
-            return None
-
-        # Step 4: Build query with ACTUAL column names (whatever they are!)
+            rbac_date_col = 'valid_from'
+        
+        # Build adaptive query
         query = f"""
-        SELECT COALESCE(SUM({sales_amount_col}), 0)
-        FROM ENTERPRISE.RETAIL_DATA.SALES_FACT
+        SELECT COALESCE(SUM({sales_col}), 0) 
+        FROM ENTERPRISE.RETAIL_DATA.SALES_FACT 
         JOIN ENTERPRISE.RETAIL_DATA.RBAC_WORK_TABLE
         ON ENTERPRISE.RETAIL_DATA.SALES_FACT.{sales_date_col} = ENTERPRISE.RETAIL_DATA.RBAC_WORK_TABLE.{rbac_date_col}
-        WHERE ENTERPRISE.RETAIL_DATA.RBAC_WORK_TABLE.USER_ID = 'victor'
-        """
+        where ENTERPRISE.RETAIL_DATA.RBAC_WORK_TABLE.USER_ID = 'victor' """
         
-        logger.info(f"Built data-type-based query:")
-        logger.info(f" Amount column: {sales_amount_col} (type: {self.sales_fact_cols.get(sales_amount_col, 'N/A')})")
-        logger.info(f" Sales date column: {sales_date_col} (type: {self.sales_fact_cols.get(sales_date_col, 'N/A')})")
-        logger.info(f" RBAC date column: {rbac_date_col} (type: {self.rbac_cols.get(rbac_date_col, 'N/A')})")
-        
+        logger.info(f"Built adaptive query: {query}")
         return query
 
 # Knowledge base
@@ -192,28 +199,34 @@ for item in KNOWLEDGE_BASE_DATA:
     for alias in item['aliases']:
         ALIAS_TO_TOOL_NAME[alias.lower()] = item['tool_name']
 
-# Intent recognition cache
+# Intent recognition cache (unchanged)
+
 _intent_cache = {}
 
-def get_user_data(user_id: str, conn) -> Optional[Dict[str, Any]]:
-    # This function now always queries the database to get the latest data
-    query = "SELECT USER_ID, ROLE, STORE_ID FROM ENTERPRISE.RETAIL_DATA.RBAC_WORK_TABLE"
-    try:
+# Cached data
+_rbac_cache = None
+
+def get_cached_rbac_data(conn):
+    global _rbac_cache
+    if _rbac_cache is None:
+        query = "SELECT USER_ID, ROLE, STORE_ID FROM ENTERPRISE.RETAIL_DATA.RBAC_WORK_TABLE"
         cur = conn.cursor()
         cur.execute(query)
         df = cur.fetch_pandas_all()
         cur.close()
         df.columns = df.columns.str.lower()
-        
-        user_row = df[df['user_id'] == user_id]
-        if user_row.empty:
-            return None
-        return {"role": user_row.iloc[0]['role'],
-                "store_id": user_row.iloc[0]['store_id']
-                }
-    except Exception as e:
-        logger.error(f"Error getting user data: {e}")
+        _rbac_cache = df
+    return _rbac_cache
+
+def get_user_data(user_id: str, conn) -> Optional[Dict[str, Any]]:
+    rbac_df = get_cached_rbac_data(conn)
+    user_row = rbac_df[rbac_df['user_id'] == user_id]
+    if user_row.empty:
         return None
+    return {
+        "role": user_row.iloc[0]['role'],
+        "store_id": user_row.iloc[0]['store_id']
+    }
 
 def get_available_metrics_list() -> str:
     metrics = [item['measure_name'] for item in KNOWLEDGE_BASE_DATA]
@@ -222,7 +235,7 @@ def get_available_metrics_list() -> str:
     else:
         return ", ".join(metrics[:-1]) + f", and {metrics[-1]}"
 
-# Intent recognition
+# Intent recognition (UNCHANGED)
 def identify_metric_intent(user_query: str) -> Optional[str]:
     # Check cache first
     query_key = user_query.lower().strip()
@@ -234,15 +247,17 @@ def identify_metric_intent(user_query: str) -> Optional[str]:
     logger.info(f"Intent recognition for query: '{user_query}'")
     
     # Pre-filter unrelated queries
-    unrelated_patterns = ["how are you", "what's your name", "weather", "time",
-                          "joke", "story", "recipe", "news", "sports", "music"]
+    unrelated_patterns = [
+        "how are you", "what's your name", "weather", "time",
+        "joke", "story", "recipe", "news", "sports", "music"
+    ]
     
     for pattern in unrelated_patterns:
         if pattern in query_lower and len(user_query.strip()) < 50:
             logger.info(f"Detected unrelated pattern: {pattern}")
             _intent_cache[query_key] = "UNRELATED"
             return "UNRELATED"
-
+    
     # Direct keyword matching
     traffic_keywords = ["traffic", "conversion", "convert", "visits"]
     for keyword in traffic_keywords:
@@ -257,14 +272,14 @@ def identify_metric_intent(user_query: str) -> Optional[str]:
             logger.info(f"Sales keyword match found: {keyword}")
             _intent_cache[query_key] = "sales_amount"
             return "sales_amount"
-
+    
     # Check aliases
     for alias, tool_name in ALIAS_TO_TOOL_NAME.items():
         if alias in query_lower:
             logger.info(f"Alias match found: {alias} -> {tool_name}")
             _intent_cache[query_key] = tool_name
             return tool_name
-
+    
     # MINIMAL TOKEN LLM fallback
     if not AZURE_OPENAI_CLIENT:
         _intent_cache[query_key] = None
@@ -287,7 +302,7 @@ def identify_metric_intent(user_query: str) -> Optional[str]:
             _intent_cache[query_key] = "traffic_conversion"
             return "traffic_conversion"
         elif "sales" in result:
-            _intent_cache[query_key] = "sales_amount"
+            _intent_cache[query_key] = "sales_amount"  
             return "sales_amount"
         else:
             _intent_cache[query_key] = "UNRELATED"
@@ -298,40 +313,38 @@ def identify_metric_intent(user_query: str) -> Optional[str]:
         _intent_cache[query_key] = None
         return None
 
-# DATA RETRIEVAL
+# ADAPTIVE DATA RETRIEVAL
 def get_metric_value_fast(conn, tool_name: str, store_id: int, user_id: str, query: str) -> Optional[float]:
-    """
-    Data retrieval that works with ANY column names thanks to data-type detection
-    """
+    """Schema-adaptive data retrieval that automatically handles column changes"""
     try:
         user_session = get_user_session(user_id, conn)
         if not user_session:
             return "Access denied"
 
-        # Check store access permissions
         if store_id != user_session.store_id:
-            access_denied_response = """Sorry I couldn't provide that information. Perhaps I can help you to find the relevant data for your store.
+            access_denied_response = """Sorry I couldn't Provide that Information. Perhaps I can help you to find the relevant data for your store
             Examples of questions I can answer:
             • "What are my sales for this month?"
             • "How's the traffic conversion rate?"
             • "Show me the current sales amount"
             What would you like to know about your store performance?"""
+            
             return access_denied_response
 
         if tool_name == "sales_amount":
-            # Execute the data-type-based query
             cur = conn.cursor()
             cur.execute(query)
             result = cur.fetchone()
             cur.close()
             return float(result[0]) if result else 0.0
+            
         elif tool_name == "traffic_conversion":
             return 0.000
+            
         return None
     except Exception as e:
         logger.error(f"Metric query error: {e}")
-        # Return a specific string to signal a data retrieval failure
-        return "data_retrieval_failed"
+        return 0.0
 
 # Response generation (unchanged)
 def generate_rich_response(user_query: str, tool_name: str, metric_value: float, store_id: int) -> str:
@@ -341,7 +354,7 @@ def generate_rich_response(user_query: str, tool_name: str, metric_value: float,
     if not measure_info:
         logger.error(f"No measure info found for tool_name: {tool_name}")
         return f"Metric not found for store {store_id}."
-
+    
     # Format value
     if tool_name == "sales_amount":
         formatted_value = f"${metric_value:,.2f}"
@@ -349,14 +362,14 @@ def generate_rich_response(user_query: str, tool_name: str, metric_value: float,
         formatted_value = f"{metric_value:.3f}"
     else:
         formatted_value = f"{metric_value:.2f}"
-
+    
     logger.info(f"Formatted value: {formatted_value}")
     
     measure_name = measure_info['measure_name']
     description = measure_info['description']
     
     base_response = f"For store {store_id}, {measure_name} is defined as {description.lower()}, and the current {measure_name} value is {formatted_value}."
-
+    
     if tool_name == "sales_amount":
         suggestions = ' You might also ask: "How does this compare to last month?" or "What are my top performing products?"'
     elif tool_name == "traffic_conversion":
@@ -394,7 +407,7 @@ async def message_handler(turn_context: TurnContext):
         return
     
     user_query = turn_context.activity.text.strip()
-    user_id = "victor" # NOTE: Hardcoded user ID - should be dynamic in a production app.
+    user_id = "victor"
     
     if not user_query or len(user_query) > 300:
         await turn_context.send_activity("Please ask a specific question about store metrics.")
@@ -415,25 +428,27 @@ async def message_handler(turn_context: TurnContext):
         if not session:
             await turn_context.send_activity("Access denied. Contact support.")
             return
-
+        
         # Intent recognition with caching
         logger.info(f"Processing user query: '{user_query}'")
+        
         tool_name = identify_metric_intent(user_query)
         logger.info(f"Identified tool_name: {tool_name}")
-
+        
         if tool_name == "UNRELATED":
             available_metrics = get_available_metrics_list()
             unrelated_response = f"""Sorry, I couldn't provide you that information. Perhaps I can help you with these details:
             Available metrics for your store:
-            • {available_metrics}
+            •{available_metrics}
             Examples of questions I can answer:
             • "What are my sales for this month?"
             • "How's the traffic conversion rate?"
             • "Show me the current sales amount"
             What would you like to know about your store performance?"""
+            
             await turn_context.send_activity(unrelated_response)
             return
-
+        
         if not tool_name:
             available_metrics = get_available_metrics_list()
             no_match_response = f"""I'm not sure what metric you're asking about. I can help you with: {available_metrics}.
@@ -442,51 +457,49 @@ async def message_handler(turn_context: TurnContext):
             • "How's my traffic conversion?"
             • "Show me store performance data"
             What specific metric would you like to see?"""
+            
             await turn_context.send_activity(no_match_response)
             return
-
+        
         # Extract store_id from user query if mentioned
-        requested_store_id = session.store_id
+        requested_store_id = session.store_id  # Default to user's store
         user_query_lower = user_query.lower()
-
+        
         # Simple pattern matching for "store [number]"
         store_match = re.search(r'store\s*#?(\d+)', user_query_lower)
         if store_match:
             try:
                 requested_store_id = int(store_match.group(1))
             except (ValueError, IndexError):
-                pass
-        
-        # Use the PURELY ROBUST QUERY BUILDER to build the query
-        query_builder = RobustQueryBuilder(conn)
-        query = query_builder.build_sales_query()
-        if query is None:
-            await turn_context.send_activity("The requested data is not available due to a schema change. Please try again later.")
-            return
+                pass # Fallback to user's store if parsing fails
 
-        # Get metric value with the robust query
+        # Get metric value with ADAPTIVE QUERY BUILDING
+        query = AdaptiveQueryBuilder(conn).build_sales_query()
+        if query is None:
+            await turn_context.send_activity("The requested data is not available due to a schema change as the database is getting updated. Please try again later.")
+            return
+        
+        # Get metric value with ADAPTIVE QUERY BUILDING
         metric_value = get_metric_value_fast(conn, tool_name, requested_store_id, user_id, query)
         logger.info(f"Retrieved metric_value: {metric_value} for tool_name: {tool_name}")
-
+        
         if isinstance(metric_value, str):
-            if metric_value == "data_retrieval_failed":
-                await turn_context.send_activity("There was a problem retrieving data for that metric. The database may be temporarily unavailable.")
-            else:
-                await turn_context.send_activity(metric_value)
+            await turn_context.send_activity(metric_value)
             return
-
+    
         if metric_value is None:
             await turn_context.send_activity(f"Cannot retrieve data for store {requested_store_id}.")
             return
-
+        
         # Generate response - NO API CALLS
         response = generate_rich_response(user_query, tool_name, metric_value, requested_store_id)
+        
         await turn_context.send_activity(response)
         
         session.last_queries.append({"query": user_query, "metric": tool_name})
         if len(session.last_queries) > 3:
             session.last_queries.pop(0)
-
+            
     except Exception as e:
         logger.error(f"Error in message_handler: {e}")
         await turn_context.send_activity("Service temporarily unavailable. Please try again.")
@@ -515,13 +528,12 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         settings = BotFrameworkAdapterSettings(app_id=APP_ID, app_password=APP_PASSWORD)
         if APP_TYPE == "SingleTenant" and APP_TENANT_ID:
             settings.oauth_endpoint = f"https://login.microsoftonline.com/{APP_TENANT_ID}"
-        
+
         adapter = BotFrameworkAdapter(settings)
         adapter._credentials = credentials
-        
+
         asyncio_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(asyncio_loop)
-        
         response = asyncio_loop.run_until_complete(
             adapter.process_activity(activity, auth_header, message_handler)
         )
