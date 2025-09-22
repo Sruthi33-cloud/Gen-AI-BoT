@@ -59,7 +59,7 @@ except Exception as e:
     logger.error(f"Error initializing AzureOpenAI client: {e}")
     AZURE_OPENAI_CLIENT = None
 
-# REVOLUTIONARY APPROACH: DATA TYPE-BASED COLUMN DETECTION
+
 _column_cache = {}
 
 def get_table_columns(conn, table_name: str) -> Dict[str, str]:
@@ -92,11 +92,10 @@ def get_table_columns(conn, table_name: str) -> Dict[str, str]:
     except Exception as e:
         logger.error(f"Error getting columns for {table_name}: {e}")
         return {}
-
+    
 def find_column_by_data_type(columns: Dict[str, str], data_type_patterns: List[str]) -> Optional[str]:
     """
-    Find column by data type - this is the GAME CHANGER!
-    No more guessing names, we use what the database tells us about the data.
+    Find column by data type.
     """
     for col_name, data_type in columns.items():
         for pattern in data_type_patterns:
@@ -105,18 +104,17 @@ def find_column_by_data_type(columns: Dict[str, str], data_type_patterns: List[s
                 return col_name
     return None
 
-# THE NEW REVOLUTIONARY QUERY BUILDER - NO NAME GUESSING!
-class DataTypeBasedQueryBuilder:
+
+class RobustQueryBuilder:
     """
-    This approach uses DATABASE METADATA instead of guessing column names.
-    It's bulletproof against any naming convention changes.
+    This approach uses DATABASE METADATA
     """
     def __init__(self, conn):
         self.conn = conn
         self.sales_fact_cols = get_table_columns(conn, 'SALES_FACT')
         self.rbac_cols = get_table_columns(conn, 'RBAC_WORK_TABLE')
     
-    def build_sales_query(self) -> str:
+    def build_sales_query(self) -> Optional[str]:
         """
         Build query using DATA TYPES to identify columns - works with ANY column names!
         """
@@ -124,7 +122,7 @@ class DataTypeBasedQueryBuilder:
         sales_amount_col = find_column_by_data_type(self.sales_fact_cols,
             ['NUMBER', 'DECIMAL', 'FLOAT', 'NUMERIC', 'REAL', 'DOUBLE']
         )
-        
+
         # Step 2: Find DATE columns for joining
         sales_date_col = find_column_by_data_type(self.sales_fact_cols,
             ['DATE', 'TIMESTAMP', 'TIME', 'DATETIME']
@@ -154,9 +152,9 @@ class DataTypeBasedQueryBuilder:
         """
         
         logger.info(f"Built data-type-based query:")
-        logger.info(f" Amount column: {sales_amount_col} (type: {self.sales_fact_cols[sales_amount_col]})")
-        logger.info(f" Sales date column: {sales_date_col} (type: {self.sales_fact_cols[sales_date_col]})")
-        logger.info(f" RBAC date column: {rbac_date_col} (type: {self.rbac_cols[rbac_date_col]})")
+        logger.info(f" Amount column: {sales_amount_col} (type: {self.sales_fact_cols.get(sales_amount_col, 'N/A')})")
+        logger.info(f" Sales date column: {sales_date_col} (type: {self.sales_fact_cols.get(sales_date_col, 'N/A')})")
+        logger.info(f" RBAC date column: {rbac_date_col} (type: {self.rbac_cols.get(rbac_date_col, 'N/A')})")
         
         return query
 
@@ -169,19 +167,22 @@ def load_knowledge_base():
     except Exception as e:
         logger.error(f"Error loading knowledge_base.json: {e}")
         return [
-            {"measure_name": "Sales Amount",
-             "tool_name": "sales_amount",
-             "description": "The total monetary value of all sales transactions. This is a key measure for a store's financial performance.",
-             "dax_formula": "SUM('SalesFact'[SalesAmount])",
-             "aliases": ["sales", "sales revenue", "total sales", "store sales"]
+            {
+                "measure_name": "Sales Amount",
+                "tool_name": "sales_amount",
+                "description": "The total monetary value of all sales transactions. This is a key measure for a store's financial performance.",
+                "dax_formula": "SUM('SalesFact'[SalesAmount])",
+                "aliases": ["sales", "sales revenue", "total sales", "store sales"]
             },
-            {"measure_name": "Traffic Conversion",
-             "tool_name": "traffic_conversion",
-             "description": "Calculated as Total Sales Transactions divided by Total Store Visits.",
-             "dax_formula": "[Total Transactions] / [Store Visits]",
-             "aliases": ["conversion rate", "traffic to sales", "customer conversion"]
+            {
+                "measure_name": "Traffic Conversion",
+                "tool_name": "traffic_conversion", 
+                "description": "Calculated as Total Sales Transactions divided by Total Store Visits.",
+                "dax_formula": "[Total Transactions] / [Store Visits]",
+                "aliases": ["conversion rate", "traffic to sales", "customer conversion"]
             }
         ]
+
 KNOWLEDGE_BASE_DATA = load_knowledge_base()
 TOOL_NAME_TO_MEASURE = {item['tool_name']: item for item in KNOWLEDGE_BASE_DATA}
 ALIAS_TO_TOOL_NAME = {}
@@ -189,14 +190,9 @@ for item in KNOWLEDGE_BASE_DATA:
     for alias in item['aliases']:
         ALIAS_TO_TOOL_NAME[alias.lower()] = item['tool_name']
 
-# Intent recognition cache - STILL MAINTAINS ≤10 TOKEN EFFICIENCY
 _intent_cache = {}
 
-# REMOVED: The old RBAC data cache that caused the issue.
-# _rbac_cache = None
-
 def get_user_data(user_id: str, conn) -> Optional[Dict[str, Any]]:
-    # This function now always queries the database to get the latest data
     query = "SELECT USER_ID, ROLE, STORE_ID FROM ENTERPRISE.RETAIL_DATA.RBAC_WORK_TABLE"
     try:
         cur = conn.cursor()
@@ -222,9 +218,9 @@ def get_available_metrics_list() -> str:
     else:
         return ", ".join(metrics[:-1]) + f", and {metrics[-1]}"
 
-# Intent recognition - UNCHANGED, STILL ≤10 TOKENS
+# Intent recognition
 def identify_metric_intent(user_query: str) -> Optional[str]:
-    # Check cache first - ZERO API calls for repeated queries
+    # Check cache first
     query_key = user_query.lower().strip()
     if query_key in _intent_cache:
         logger.info(f"Cache hit for query: '{user_query}' -> {_intent_cache[query_key]}")
@@ -233,7 +229,7 @@ def identify_metric_intent(user_query: str) -> Optional[str]:
     query_lower = user_query.lower()
     logger.info(f"Intent recognition for query: '{user_query}'")
     
-    # Pre-filter unrelated queries - NO API CALL
+    # Pre-filter unrelated queries
     unrelated_patterns = ["how are you", "what's your name", "weather", "time",
                           "joke", "story", "recipe", "news", "sports", "music"]
     
@@ -243,7 +239,7 @@ def identify_metric_intent(user_query: str) -> Optional[str]:
             _intent_cache[query_key] = "UNRELATED"
             return "UNRELATED"
 
-    # Direct keyword matching - NO API CALL
+    # Direct keyword matching
     traffic_keywords = ["traffic", "conversion", "convert", "visits"]
     for keyword in traffic_keywords:
         if keyword in query_lower:
@@ -258,19 +254,18 @@ def identify_metric_intent(user_query: str) -> Optional[str]:
             _intent_cache[query_key] = "sales_amount"
             return "sales_amount"
 
-    # Check aliases - NO API CALL
+    # Check aliases
     for alias, tool_name in ALIAS_TO_TOOL_NAME.items():
         if alias in query_lower:
             logger.info(f"Alias match found: {alias} -> {tool_name}")
             _intent_cache[query_key] = tool_name
             return tool_name
 
-    # MINIMAL TOKEN LLM fallback - ONLY when absolutely necessary
+    # MINIMAL TOKEN LLM fallback
     if not AZURE_OPENAI_CLIENT:
         _intent_cache[query_key] = None
         return None
-    
-    # ULTRA-MINIMAL PROMPT: Input ~2 tokens, Output 8 tokens = 10 total
+        
     prompt = f"'{user_query}' sales or traffic?"
     
     try:
@@ -299,7 +294,7 @@ def identify_metric_intent(user_query: str) -> Optional[str]:
         _intent_cache[query_key] = None
         return None
 
-# REVOLUTIONARY DATA RETRIEVAL - WORKS WITH ANY COLUMN NAMES
+# DATA RETRIEVAL
 def get_metric_value_fast(conn, tool_name: str, store_id: int, user_id: str, query: str) -> Optional[float]:
     """
     Data retrieval that works with ANY column names thanks to data-type detection
@@ -370,7 +365,7 @@ def generate_rich_response(user_query: str, tool_name: str, metric_value: float,
     
     return final_response
 
-# Session management (unchanged)
+# Session management
 class UserSession:
     def __init__(self, user_id: str, role: str, store_id: int):
         self.user_id = user_id
@@ -395,7 +390,7 @@ async def message_handler(turn_context: TurnContext):
         return
     
     user_query = turn_context.activity.text.strip()
-    user_id = "victor" # NOTE: Hardcoded user ID - should be dynamic in a production app.
+    user_id = "victor" 
     
     if not user_query or len(user_query) > 300:
         await turn_context.send_activity("Please ask a specific question about store metrics.")
@@ -417,7 +412,7 @@ async def message_handler(turn_context: TurnContext):
             await turn_context.send_activity("Access denied. Contact support.")
             return
 
-        # Intent recognition with caching - MINIMAL API USAGE (≤10 tokens)
+        # Intent recognition with caching
         logger.info(f"Processing user query: '{user_query}'")
         tool_name = identify_metric_intent(user_query)
         logger.info(f"Identified tool_name: {tool_name}")
@@ -446,8 +441,8 @@ async def message_handler(turn_context: TurnContext):
             await turn_context.send_activity(no_match_response)
             return
 
-        # Extract store_id from user query if mentioned (simple detection)
-        requested_store_id = session.store_id  # Default to user's store
+        # Extract store_id from user query if mentioned
+        requested_store_id = session.store_id
         user_query_lower = user_query.lower()
 
         # Simple pattern matching for "store [number]"
@@ -456,16 +451,16 @@ async def message_handler(turn_context: TurnContext):
             try:
                 requested_store_id = int(store_match.group(1))
             except (ValueError, IndexError):
-                pass  # Fallback to user's store if parsing fails
-
-        # THE REVOLUTIONARY PART: Build query using data types, not name guessing!
-        query_builder = DataTypeBasedQueryBuilder(conn)
+                pass
+        
+        # Use the PURELY ROBUST QUERY BUILDER to build the query
+        query_builder = RobustQueryBuilder(conn)
         query = query_builder.build_sales_query()
         if query is None:
-            await turn_context.send_activity("The requested data is not available due to a schema change as the database is getting updated. Please try again later.")
+            await turn_context.send_activity("The requested data is not available due to a schema change. Please try again later.")
             return
 
-        # Get metric value with DATA-TYPE-BASED QUERY
+        # Get metric value with the robust query
         metric_value = get_metric_value_fast(conn, tool_name, requested_store_id, user_id, query)
         logger.info(f"Retrieved metric_value: {metric_value} for tool_name: {tool_name}")
 
@@ -495,7 +490,7 @@ async def message_handler(turn_context: TurnContext):
         if conn:
             conn.close()
 
-# Main function (unchanged)
+# Main function
 def main(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == 'GET':
         return func.HttpResponse("Bot endpoint is healthy", status_code=200)
