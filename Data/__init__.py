@@ -476,9 +476,15 @@ async def message_handler(turn_context: TurnContext):
                 requested_store_id = int(store_match.group(1))
             except (ValueError, IndexError):
                 pass # Fallback to user's store if parsing fails
+
+        # Get metric value with ADAPTIVE QUERY BUILDING
+        query = AdaptiveQueryBuilder(conn).build_sales_query()
+        if query is None:
+            await turn_context.send_activity("The requested data is not available due to a schema change as the database is getting updated. Please try again later.")
+            return
         
         # Get metric value with ADAPTIVE QUERY BUILDING
-        metric_value = get_metric_value_fast(conn, tool_name, requested_store_id, user_id)
+        metric_value = get_metric_value_fast(conn, tool_name, requested_store_id, user_id, query)
         logger.info(f"Retrieved metric_value: {metric_value} for tool_name: {tool_name}")
         
         if isinstance(metric_value, str):
@@ -544,5 +550,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logger.error(f"Error processing request: {e}")
         return func.HttpResponse("Internal error.", status_code=500)
+
 
 
