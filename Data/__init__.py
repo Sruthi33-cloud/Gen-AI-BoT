@@ -146,7 +146,7 @@ class RobustQueryBuilder:
 
         # Step 4: Build query with ACTUAL column names (whatever they are!)
         query = f"""
-        SELECT COALESCE(SUM({sales_amount_col}), 0)
+        SELECT COALESCE(SUM(salesamount), 0)
         FROM ENTERPRISE.RETAIL_DATA.SALES_FACT
         JOIN ENTERPRISE.RETAIL_DATA.RBAC_WORK_TABLE
         ON ENTERPRISE.RETAIL_DATA.SALES_FACT.{sales_date_col} = ENTERPRISE.RETAIL_DATA.RBAC_WORK_TABLE.{rbac_date_col}
@@ -534,3 +534,4 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logger.error(f"Error processing request: {e}")
         return func.HttpResponse("Internal error.", status_code=500)
+
